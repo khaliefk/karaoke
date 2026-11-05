@@ -106,7 +106,88 @@ public class KaraokeServer {
                 return newFixedLengthResponse(Response.Status.OK,
                         "application/json", parent.infoJson());
             }
+            if (uri.equals("/api/search")) {
+                return searchProxy(session);
+            }
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found");
+        }
+
+        /* Proxy pencarian: HP cuma manggil server TV (same-origin, bebas CORS),
+           server TV yang fetch ke instance Invidious. Instance publik sering
+           mati / matikan API-nya, jadi dicoba berantai dan jawabannya divalidasi
+           (harus JSON array berisi videoId, bukan halaman HTML error).
+           Daftar host bisa di-override buat tes lokal:
+           -Dkaraoke.search.hosts=http://127.0.0.1:18080,https://... */
+        private static final String[] SEARCH_HOSTS = searchHosts();
+
+        private static String[] searchHosts() {
+            String prop = System.getProperty("karaoke.search.hosts");
+            if (prop != null && !prop.trim().isEmpty()) {
+                return prop.trim().split("\\s*,\\s*");
+            }
+            return new String[] {
+                "https://yt.chocolatemoo53.com",
+                "https://invidious.materialio.us"
+            };
+        }
+
+        private Response searchProxy(IHTTPSession session) {
+            String q = null;
+            try {
+                java.util.List<String> vals = session.getParameters().get("q");
+                if (vals != null && !vals.isEmpty()) q = vals.get(0);
+            } catch (Exception ignored) {}
+            if (q == null || q.trim().isEmpty()) {
+                return newFixedLengthResponse(Response.Status.OK,
+                        "application/json", "[]");
+            }
+            String query;
+            try {
+                query = java.net.URLEncoder.encode(q.trim(), "UTF-8");
+            } catch (Exception e) {
+                return newFixedLengthResponse(Response.Status.OK,
+                        "application/json", "[]");
+            }
+            for (String host : SEARCH_HOSTS) {
+                String body = fetchJson(host + "/api/v1/search?q=" + query + "&type=video");
+                if (body != null) {
+                    return newFixedLengthResponse(Response.Status.OK,
+                            "application/json", body);
+                }
+            }
+            return newFixedLengthResponse(Response.Status.OK,
+                    "application/json", "[]");
+        }
+
+        private String fetchJson(String urlStr) {
+            java.net.HttpURLConnection conn = null;
+            try {
+                java.net.URL url = new java.net.URL(urlStr);
+                conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(5000);
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("User-Agent", "KaraokeRemote/1.0");
+                conn.setRequestProperty("Accept", "application/json");
+                if (conn.getResponseCode() != 200) return null;
+                java.io.InputStream in = conn.getInputStream();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n, total = 0;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (total > 2 * 1024 * 1024) return null;
+                    out.write(buf, 0, n);
+                }
+                String body = out.toString("UTF-8").trim();
+                if (!body.startsWith("[")) return null;
+                if (body.indexOf("\"videoId\"") < 0) return null;
+                return body;
+            } catch (Exception e) {
+                return null;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
         }
 
         private Response serveAsset(String name, String mime) {

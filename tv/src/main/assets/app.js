@@ -17,17 +17,18 @@
   }
 
   /* ---------- WebSocket ---------- */
-  var ws = null, wsOk = false, authFailed = false;
+  var ws = null, wsOk = false, authFailed = false, manualDisconnect = false;
 
   function wsUrl() { return 'ws://' + location.hostname + ':' + WS_PORT; }
 
   function connect() {
-    if (authFailed) return;
+    if (authFailed || manualDisconnect) return;
     try { ws = new WebSocket(wsUrl()); } catch (e) { setTimeout(connect, 2000); return; }
     ws.onopen = function () {
       wsOk = true;
       send({ type: 'auth', role: MODE, code: CODE });
       if (MODE === 'phone') { send({ type: 'get_state' }); }
+      var d = $('btnDisconnect'); if (d) d.classList.remove('hidden');
       setConn(true, 'Terhubung ke TV');
     };
     ws.onmessage = function (ev) {
@@ -41,12 +42,34 @@
         authFailed = true;
         setConn(false, 'Kode pairing salah. Scan ulang QR di TV.');
         var b = $('btnRescan'); if (b) b.classList.remove('hidden');
+        var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
+        return;
+      }
+      if (manualDisconnect) {
+        setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
+        var b2 = $('btnRescan'); if (b2) b2.classList.remove('hidden');
         return;
       }
       setConn(false, 'Koneksi putus. Menghubungkan ulang…');
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { /* onclose yang urus reconnect */ };
+  }
+
+  /* Putus manual dari TV: tutup socket, matikan auto-reconnect. TV tetap
+     jalan (lagu/antrean dipegang halaman TV), cuma HP-nya yang putus.
+     Sambung lagi lewat tombol "Scan Ulang QR TV" (halaman di-load ulang). */
+  function disconnectTv() {
+    manualDisconnect = true;
+    wsOk = false;
+    try { if (ws) ws.close(); } catch (e) {}
+    setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
+    var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
+    var b = $('btnRescan'); if (b) b.classList.remove('hidden');
+    var card = $('npCard'); if (card) card.classList.add('hidden');
+    $('queueCount').textContent = '0';
+    $('queueList').innerHTML = '';
+    setSearchStatus('Putus dari TV. TV tetap jalan, cuma HP-nya yang putus.');
   }
 
   function send(obj) {
@@ -230,8 +253,15 @@
     return fetch(url, { signal: ctrl.signal }).finally(function () { clearTimeout(timer); });
   }
 
-  var INVIDIOUS = ['https://vid.puffyan.us', 'https://inv.nadeko.net', 'https://yewtu.be'];
-  var PIPED = ['https://piped.video', 'https://piped.adminforge.de'];
+  /* Instance Invidious yang masih hidup (dicek 6 Nov 2026):
+     - yt.chocolatemoo53.com (api=true, cors=true di registry resmi)
+     - invidious.materialio.us (hasil JSON ok, tapi CORS-nya cuma
+       mengizinkan origin sendiri -> dari HP langsung bakal gagal CORS,
+       makanya pencarian utama lewat proxy server TV /api/search).
+     Yang sudah MATI semua: vid.puffyan.us (timeout), inv.nadeko.net
+     (API dimatikan, 403), yewtu.be (balikin HTML), piped.video +
+     piped.adminforge.de (API mati). Piped sudah tidak dipakai. */
+  var INVIDIOUS = ['https://yt.chocolatemoo53.com', 'https://invidious.materialio.us'];
 
   function pickThumb(thumbs) {
     if (!thumbs || !thumbs.length) return '';
@@ -250,11 +280,13 @@
              duration: x.lengthSeconds || 0, thumb: pickThumb(x.videoThumbnails) };
   }
 
-  function normPiped(x) {
-    var id = '';
-    if (x.url) { var m = x.url.match(/[?&]v=([^&]+)/); if (m) id = m[1]; }
-    return { videoId: id, title: x.title || '', channel: x.uploaderName || '',
-             duration: x.duration || 0, thumb: pickThumb(x.thumbnails) };
+  function showSearchResult(items) {
+    if (items && items.length) {
+      setSearchStatus(items.length + ' lagu ketemu. Ketuk untuk langsung putar, + untuk masuk antrean.');
+      renderResults(items);
+      return true;
+    }
+    return false;
   }
 
   function doSearch() {
@@ -263,14 +295,21 @@
     if (!/karaoke/i.test(q)) q += ' karaoke';
     setSearchStatus('Mencari…');
     $('results').innerHTML = '';
-    searchChain(q).then(function (items) {
-      if (items && items.length) {
-        setSearchStatus(items.length + ' lagu ketemu. Ketuk untuk langsung putar, + untuk masuk antrean.');
-        renderResults(items);
-      } else {
-        setSearchStatus('Pencarian gagal, cek internet / coba lagi.');
-      }
-    });
+    /* Jalur utama: proxy server TV (/api/search) — same-origin, bebas CORS,
+       server yang fetch ke instance Invidious. Kalau proxy kosong/gagal,
+       fallback ke fetch langsung dari HP (instance cadangan). */
+    fetchTimeout('/api/search?q=' + encodeURIComponent(q), 20000)
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (d) {
+        var arr = Array.isArray(d) ? d : [];
+        var items = arr.filter(function (x) { return x.type === 'video' && x.videoId; }).map(normInv);
+        if (showSearchResult(items)) return true;
+        return searchChain(q).then(showSearchResult);
+      })
+      .catch(function () { return searchChain(q).then(showSearchResult); })
+      .then(function (ok) {
+        if (!ok) setSearchStatus('Pencarian gagal, cek internet / coba lagi.');
+      });
   }
 
   function searchChain(q) {
@@ -282,17 +321,6 @@
           .then(function (d) {
             var arr = Array.isArray(d) ? d : [];
             return arr.filter(function (x) { return x.type === 'video' && x.videoId; }).map(normInv);
-          });
-      });
-    });
-    PIPED.forEach(function (base) {
-      chain.push(function () {
-        return fetchTimeout(base + '/api/search?q=' + encodeURIComponent(q), 8000)
-          .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
-          .then(function (d) {
-            var arr = (d && d.items) || [];
-            return arr.filter(function (x) { return x.type === 'stream' && x.url; }).map(normPiped)
-                      .filter(function (x) { return x.videoId; });
           });
       });
     });
@@ -395,6 +423,7 @@
   function initPhone() {
     $('phoneView').classList.remove('hidden');
     setConn(false, 'Menghubungkan ke TV…');
+    $('btnDisconnect').onclick = disconnectTv;
     $('searchBtn').onclick = doSearch;
     $('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
     $('btnPlayPause').onclick = function () {

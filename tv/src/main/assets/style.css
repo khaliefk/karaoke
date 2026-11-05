@@ -24,6 +24,8 @@ button { cursor: pointer; }
 #phoneView { min-height: 100vh; padding: 12px 14px 40px; background: #111; }
 .phone-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px 12px; }
 .phone-title { font-size: 20px; font-weight: 800; }
+.conn-right { display: flex; align-items: center; gap: 10px; }
+.btn.danger-outline { background: transparent; border: 1px solid #b91c1c; color: #f87171; }
 .conn-dot { width: 14px; height: 14px; border-radius: 50%; background: #f59e0b; }
 .conn-dot.on { background: #22c55e; }
 .conn-dot.off { background: #ef4444; }
