@@ -221,7 +221,10 @@
         break;
       case 'volume':
         volume = Math.max(0, Math.min(100, parseInt(msg.value, 10) || 0));
-        if (player && playerReady) { try { player.setVolume(volume); } catch (e) {} }
+        if (player && playerReady) {
+          try { if (volume > 0) player.unMute(); } catch (e) {}
+          try { player.setVolume(volume); } catch (e) {}
+        }
         broadcast();
         break;
       case 'queue_remove':
@@ -263,7 +266,7 @@
 
   /* ================= MODE PHONE ================= */
   var lastState = null;
-  var searchTimer = null;
+  var volDragging = false;
 
   function setConn(ok, text) {
     var dot = $('connDot');
@@ -409,7 +412,9 @@
       $('npBar').style.width = (s.duration > 0 ? Math.min(100, (s.position / s.duration) * 100) : 0) + '%';
       $('npTime').textContent = fmt(s.position) + ' / ' + fmt(s.duration);
       $('btnPlayPause').textContent = s.playing ? '⏸' : '▶';
-      if (typeof s.volume === 'number') {
+      /* jangan rebut slider saat user lagi geser: broadcast tiap detik
+         sempat bikin jempol balik ke nilai lama, volume jadi susah diatur */
+      if (typeof s.volume === 'number' && !volDragging) {
         $('volSlider').value = s.volume;
         $('volVal').textContent = s.volume;
       }
@@ -480,11 +485,17 @@
       send({ type: 'seek', value: sec });
       setSearchStatus('Loncat ke ' + fmt(sec) + '.');
     });
-    $('volSlider').addEventListener('input', function () {
+    /* volume: kirim langsung tiap geseran (tanpa debounce), dan tandai
+       saat jempol nempel di slider supaya broadcast tidak merebutnya */
+    var vol = $('volSlider');
+    vol.addEventListener('pointerdown', function () { volDragging = true; });
+    vol.addEventListener('pointerup', function () { volDragging = false; });
+    vol.addEventListener('pointercancel', function () { volDragging = false; });
+    vol.addEventListener('change', function () { volDragging = false; });
+    vol.addEventListener('input', function () {
       var v = parseInt(this.value, 10);
       $('volVal').textContent = v;
-      if (searchTimer) clearTimeout(searchTimer);
-      searchTimer = setTimeout(function () { send({ type: 'volume', value: v }); }, 150);
+      send({ type: 'volume', value: v });
     });
   }
 
