@@ -1,0 +1,3 @@
+rootProject.name = 'karaoke'
+include ':tv'
+include ':remote'

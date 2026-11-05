@@ -1,0 +1,13 @@
+# SDK/tooling (downloadable, jangan masuk repo)
+tools/
+# Local SDK path
+local.properties
+# Signing key — jangan pernah masuk repo
+*.keystore
+*.jks
+# APK signature sidecar (dibuat ulang tiap build)
+*.idsig
+# Build outputs
+build/
+*/build/
+*.class
