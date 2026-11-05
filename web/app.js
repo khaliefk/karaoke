@@ -80,10 +80,27 @@
   var queue = [], current = null, history = [];
   var playing = false, position = 0, duration = 0, volume = 80;
   var player = null, playerReady = false, ytLoaded = false, pendingVideo = null;
+  var hadPhone = false;   // pernah ada HP terhubung sejak halaman dimuat
+  var lastCode = '';      // kode pairing terakhir yang ditampilkan di layar tunggu
 
   function showTv(id) {
     $('waitScreen').classList.toggle('hidden', id !== 'wait');
     $('playerScreen').classList.toggle('hidden', id !== 'player');
+  }
+
+  /* HP terakhir putus: sesi selesai — matikan lagu, bersihkan antrean,
+     balik ke menu awal (QR). Dipanggil saat server kirim peer_left,
+     dan sebagai cadangan oleh polling /api/info kalau pesan itu kelewat. */
+  function resetSession() {
+    if (player && playerReady) {
+      try { player.stopVideo(); }
+      catch (e) { try { player.pauseVideo(); } catch (e2) {} }
+    }
+    pendingVideo = null;
+    current = null; playing = false; position = 0; duration = 0;
+    queue = []; history = [];
+    showTv('wait');
+    broadcast();
   }
 
   function loadYTApi() {
@@ -243,15 +260,33 @@
   function initTv() {
     $('tvView').classList.remove('hidden');
     showTv('wait');
-    fetch('/api/info').then(function (r) { return r.json(); }).then(function (info) {
-      if (info.code) $('pairCode').textContent = String(info.code).split('').join(' ');
-      if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port 8080';
-    }).catch(function () {});
-    // refresh QR tiap 60 detik (kode bisa ganti kalau server restart)
-    setInterval(function () {
-      var img = $('qrImg');
-      img.src = '/qr.png?t=' + Date.now();
-    }, 60000);
+    /* polling /api/info tiap detik: tampilkan kode pairing terbaru +
+       hitung mundur rotasi QR, dan jadi cadangan kalau pesan peer_left
+       kelewat saat WS TV sedang reconnect */
+    function refreshQrInfo() {
+      fetch('/api/info').then(function (r) { return r.json(); }).then(function (info) {
+        if (info.code) {
+          $('pairCode').textContent = String(info.code).split('').join(' ');
+          if (info.code !== lastCode) {
+            lastCode = info.code;
+            $('qrImg').src = '/qr.png?t=' + Date.now();
+          }
+        }
+        if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port 8080';
+        var cd = $('qrCountdown');
+        if (cd) {
+          if (info.phoneConnected) cd.textContent = 'HP terhubung — QR dijeda';
+          else if (typeof info.codeExpiresIn === 'number') cd.textContent = 'QR baru dalam ' + info.codeExpiresIn + ' dtk';
+          else cd.textContent = '';
+        }
+        if (!info.phoneConnected && hadPhone && current) {
+          hadPhone = false;
+          resetSession();
+        }
+      }).catch(function () {});
+    }
+    refreshQrInfo();
+    setInterval(refreshQrInfo, 1000);
     // posisi player tiap 1 detik saat jalan
     setInterval(function () {
       if (player && playerReady && playing) {
@@ -507,7 +542,9 @@
   /* ---------- dispatch ---------- */
   function onMsg(msg) {
     if (MODE === 'tv') {
-      if (msg.type === 'state') return; // state datang dari TV sendiri
+      if (msg.type === 'state' || msg.type === 'hello') return; // dari TV sendiri / server
+      if (msg.type === 'peer_left') { hadPhone = false; resetSession(); return; }
+      hadPhone = true; // perintah dari HP
       tvCommand(msg);
     } else {
       if (msg.type === 'state') renderState(msg);

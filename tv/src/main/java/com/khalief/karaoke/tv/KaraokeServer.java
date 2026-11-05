@@ -33,16 +33,55 @@ public class KaraokeServer {
     public static final int HTTP_PORT = 8080;
     public static final int WS_PORT = 8081;
 
+    /* Rotasi kode pairing: selagi tidak ada HP terhubung, kode diganti
+       berkala supaya tiap sesi dapat QR baru (minta user 6 Nov 2026).
+       Default 30 detik, bisa di-override buat tes:
+       -Dkaraoke.code.rotationMs=3000 */
+    public static final long CODE_ROTATION_MS = rotationMs();
+    public static final long CODE_GRACE_MS = 60000;
+
+    private static long rotationMs() {
+        try {
+            return Long.parseLong(System.getProperty("karaoke.code.rotationMs", "30000"));
+        } catch (Exception e) {
+            return 30000;
+        }
+    }
+
+    public static String newCode() {
+        return String.format("%06d", 100000 + new java.security.SecureRandom().nextInt(900000));
+    }
+
     private final String ip;
-    private final String code;
+    private volatile String code;
+    private volatile String prevCode;
+    private volatile long prevCodeUntil;
+    private volatile long codeChangedAt;
+    private final java.util.concurrent.atomic.AtomicInteger phoneCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.ScheduledExecutorService rotator;
     private final KaraokeHttpServer http;
     private final KaraokeWsServer ws;
 
     public KaraokeServer(String ip, String code, AssetProvider assets, QrProvider qr) {
         this.ip = ip;
         this.code = code;
+        this.codeChangedAt = System.currentTimeMillis();
         this.http = new KaraokeHttpServer(HTTP_PORT, assets, qr, this);
-        this.ws = new KaraokeWsServer(new InetSocketAddress(WS_PORT), code);
+        this.ws = new KaraokeWsServer(new InetSocketAddress(WS_PORT), this);
+        java.util.concurrent.ThreadFactory daemon = new java.util.concurrent.ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "karaoke-code-rotation");
+                t.setDaemon(true);
+                return t;
+            }
+        };
+        this.rotator = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(daemon);
+        this.rotator.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() { rotationTick(); }
+        }, 1, 1, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     public void start() throws IOException {
@@ -51,6 +90,7 @@ public class KaraokeServer {
     }
 
     public void stop() {
+        try { rotator.shutdownNow(); } catch (Exception ignored) {}
         try { http.stop(); } catch (Exception ignored) {}
         try { ws.stop(1000); } catch (Exception ignored) {}
     }
@@ -58,12 +98,64 @@ public class KaraokeServer {
     public String getCode() { return code; }
     public String getIp() { return ip; }
 
+    public boolean isPhoneConnected() { return phoneCount.get() > 0; }
+
+    /** Sisa detik sampai kode diganti; -1 kalau rotasi dijeda (HP terhubung). */
+    public int getCodeExpiresIn() {
+        if (phoneCount.get() > 0) return -1;
+        long left = CODE_ROTATION_MS - (System.currentTimeMillis() - codeChangedAt);
+        return (int) Math.max(0, left / 1000);
+    }
+
+    /** Kode yang diterima saat auth: kode aktif, atau kode lama yang masih
+        dalam masa tenggang (HP yang scan tepat sebelum rotasi tetap bisa masuk). */
+    public boolean checkCode(String got) {
+        if (got == null) return false;
+        if (got.equals(code)) return true;
+        return prevCode != null && got.equals(prevCode)
+                && System.currentTimeMillis() < prevCodeUntil;
+    }
+
+    /** Ganti kode sekarang (dipanggil timer saat idle, dan langsung saat
+        HP terakhir putus supaya QR baru langsung tersedia). */
+    public synchronized void rotateCodeNow() {
+        prevCode = code;
+        prevCodeUntil = System.currentTimeMillis() + CODE_GRACE_MS;
+        code = newCode();
+        codeChangedAt = System.currentTimeMillis();
+    }
+
+    private void rotationTick() {
+        try {
+            if (phoneCount.get() == 0
+                    && System.currentTimeMillis() - codeChangedAt >= CODE_ROTATION_MS) {
+                rotateCodeNow();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    void phoneConnected() {
+        phoneCount.incrementAndGet();
+    }
+
+    void phoneDisconnected() {
+        if (phoneCount.decrementAndGet() <= 0) {
+            phoneCount.set(0);
+            /* HP terakhir putus: sesi selesai, QR baru langsung,
+               dan TV balik ke menu awal */
+            rotateCodeNow();
+            ws.sendToTv("{\"type\":\"peer_left\"}");
+        }
+    }
+
     public String controllerUrl() {
         return "http://" + ip + ":" + HTTP_PORT + "/?mode=phone&code=" + code;
     }
 
     public String infoJson() {
-        return "{\"code\":\"" + code + "\",\"ip\":\"" + ip + "\",\"wsPort\":" + WS_PORT + "}";
+        return "{\"code\":\"" + code + "\",\"ip\":\"" + ip + "\",\"wsPort\":" + WS_PORT
+                + ",\"phoneConnected\":" + isPhoneConnected()
+                + ",\"codeExpiresIn\":" + getCodeExpiresIn() + "}";
     }
 
     /* ---------- HTTP ---------- */
@@ -204,14 +296,23 @@ public class KaraokeServer {
     /* ---------- WebSocket relay ---------- */
 
     static class KaraokeWsServer extends WebSocketServer {
-        private final String code;
+        private final KaraokeServer parent;
         private final Set<WebSocket> authed =
                 Collections.newSetFromMap(new ConcurrentHashMap<WebSocket, Boolean>());
         private final Map<WebSocket, String> roles = new ConcurrentHashMap<>();
 
-        KaraokeWsServer(InetSocketAddress addr, String code) {
+        KaraokeWsServer(InetSocketAddress addr, KaraokeServer parent) {
             super(addr);
-            this.code = code;
+            this.parent = parent;
+        }
+
+        /** Kirim pesan ke semua halaman TV yang sudah auth. */
+        void sendToTv(String message) {
+            for (WebSocket c : getConnections()) {
+                if (authed.contains(c) && "tv".equals(roles.get(c)) && c.isOpen()) {
+                    try { c.send(message); } catch (Exception ignored) {}
+                }
+            }
         }
 
         @Override
@@ -221,8 +322,12 @@ public class KaraokeServer {
 
         @Override
         public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+            String role = roles.get(conn);
             authed.remove(conn);
             roles.remove(conn);
+            if ("phone".equals(role)) {
+                parent.phoneDisconnected();
+            }
         }
 
         @Override
@@ -242,9 +347,10 @@ public class KaraokeServer {
                 }
                 if ("phone".equals(role)) {
                     String got = jsonField(message, "code");
-                    if (code.equals(got)) {
+                    if (parent.checkCode(got)) {
                         authed.add(conn);
                         roles.put(conn, "phone");
+                        parent.phoneConnected();
                         conn.send("{\"type\":\"hello\",\"ok\":true}");
                     } else {
                         conn.close(4001, "bad code");

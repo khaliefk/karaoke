@@ -23,7 +23,6 @@ public class KaraokeService extends Service {
     private KaraokeServer server;
     private String code;
     private String ip;
-    private byte[] cachedQr;
 
     @Override
     public void onCreate() {
@@ -50,10 +49,9 @@ public class KaraokeService extends Service {
         KaraokeServer.QrProvider qr = new KaraokeServer.QrProvider() {
             @Override
             public byte[] getQrPng() throws Exception {
-                if (cachedQr == null) {
-                    cachedQr = QrCode.makePng(server.controllerUrl(), 512);
-                }
-                return cachedQr;
+                /* QR selalu digambar ulang dari URL terbaru: kode pairing
+                   berotasi, jadi cache lama akan menampilkan kode kadaluarsa */
+                return QrCode.makePng(server.controllerUrl(), 512);
             }
         };
 
