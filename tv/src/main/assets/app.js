@@ -101,6 +101,11 @@
 
   function createPlayer(videoId) {
     pendingVideo = null;
+    /* JANGAN PERNAH ada dua player di div yang sama: hancurkan dulu.
+       Tanpa ini, player lama tetap jalan tapi tak terpegang (orphan),
+       sementara `player` menunjuk ke player baru yang gagal init —
+       semua perintah sesudahnya (ganti lagu, next, pause, seek) hilang. */
+    if (player) { try { player.destroy(); } catch (e) {} player = null; playerReady = false; }
     player = new YT.Player('player', {
       videoId: videoId,
       playerVars: { autoplay: 1, controls: 0, fs: 0, rel: 0, modestbranding: 1, playsinline: 1 },
@@ -109,6 +114,8 @@
           playerReady = true;
           try { e.target.setVolume(volume); } catch (err) {}
           e.target.playVideo();
+          /* lagu yang diminta saat player masih init: putar sekarang */
+          if (pendingVideo) { var v = pendingVideo; pendingVideo = null; loadVideoByIdSafe(v); }
         },
         onStateChange: function (e) {
           if (e.data === YT.PlayerState.ENDED) { playNext(); }
@@ -120,9 +127,22 @@
     });
   }
 
+  function loadVideoByIdSafe(videoId) {
+    try {
+      player.loadVideoById(videoId);
+    } catch (e) {
+      /* player rusak: bangun ulang dari nol (destroy dulu di createPlayer) */
+      createPlayer(videoId);
+    }
+  }
+
   function loadVideo(v) {
     if (!player) { pendingVideo = v.videoId; loadYTApi(); if (window.YT && window.YT.Player) createPlayer(v.videoId); return; }
-    try { player.loadVideoById(v.videoId); } catch (e) { createPlayer(v.videoId); }
+    /* player ada tapi belum ready (internet lambat = init bisa makan detik):
+       JANGAN panggil loadVideoById dulu — simpan, onReady yang eksekusi.
+       Dulu di sini langsung dipanggil dan throw-nya bikin player ganda. */
+    if (!playerReady) { pendingVideo = v.videoId; return; }
+    loadVideoByIdSafe(v.videoId);
   }
 
   function playNow(v) {
@@ -192,6 +212,13 @@
       case 'next': playNext(); break;
       case 'prev': playPrev(); break;
       case 'replay': replay(); break;
+      case 'seek':
+        var s = parseFloat(msg.value);
+        if (!isNaN(s) && player && playerReady) {
+          try { player.seekTo(Math.max(0, s), true); } catch (e) {}
+          position = Math.max(0, s); broadcast();
+        }
+        break;
       case 'volume':
         volume = Math.max(0, Math.min(100, parseInt(msg.value, 10) || 0));
         if (player && playerReady) { try { player.setVolume(volume); } catch (e) {} }
@@ -414,8 +441,17 @@
       var rm = document.createElement('button');
       rm.className = 'queue-remove';
       rm.textContent = '✕';
-      rm.onclick = function () { send({ type: 'queue_remove', index: idx }); };
+      rm.onclick = function (ev) {
+        ev.stopPropagation();
+        send({ type: 'queue_remove', index: idx });
+      };
       row.appendChild(img); row.appendChild(t); row.appendChild(rm);
+      /* ketuk baris antrean = putar lagu itu sekarang (keluar dari antrean) */
+      row.onclick = function () {
+        send({ type: 'queue_remove', index: idx });
+        send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
+        setSearchStatus('Memutar dari antrean: ' + it.title);
+      };
       list.appendChild(row);
     });
   }
@@ -434,6 +470,16 @@
     $('btnPrev').onclick = function () { send({ type: 'prev' }); };
     $('btnReplay').onclick = function () { send({ type: 'replay' }); };
     $('btnClearQueue').onclick = function () { send({ type: 'queue_clear' }); };
+    /* ketuk bilah progres = loncat (seek) ke bagian lagu itu */
+    $('npProgress').addEventListener('click', function (ev) {
+      if (!lastState || !lastState.current || !lastState.duration) return;
+      var r = this.getBoundingClientRect();
+      var frac = (ev.clientX - r.left) / r.width;
+      frac = Math.max(0, Math.min(1, frac));
+      var sec = Math.floor(frac * lastState.duration);
+      send({ type: 'seek', value: sec });
+      setSearchStatus('Loncat ke ' + fmt(sec) + '.');
+    });
     $('volSlider').addEventListener('input', function () {
       var v = parseInt(this.value, 10);
       $('volVal').textContent = v;
