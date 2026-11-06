@@ -150,5 +150,16 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        /** Dipanggil dari halaman web saat user menekan "Keluar". */
+        @JavascriptInterface
+        public void exitApp() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    finish();
+                }
+            });
+        }
     }
 }

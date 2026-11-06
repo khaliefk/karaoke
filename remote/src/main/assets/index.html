@@ -17,14 +17,23 @@
     <img id="qrImg" class="qr-img" src="/qr.png" alt="QR pairing">
     <div class="wait-code-label">atau masukkan kode di HP:</div>
     <div id="pairCode" class="wait-code">------</div>
+    <div id="qrCountdown" class="wait-countdown">QR baru dalam 30 dtk</div>
     <div id="waitIp" class="wait-ip"></div>
+    <div class="wait-version">v1.1.0</div>
+    <div class="wait-actions">
+      <button id="btnAboutWait" class="btn ghost-tv">About</button>
+      <button id="btnExitWait" class="btn exit-btn">✕ Keluar</button>
+    </div>
   </div>
   <!-- Layar player -->
   <div id="playerScreen" class="player-screen hidden">
     <div id="playerWrap"><div id="player"></div></div>
     <div id="nowBar" class="now-bar">
-      <div id="nowTitle" class="now-title"></div>
-      <div id="nextTitle" class="now-next"></div>
+      <div class="now-text">
+        <div id="nowTitle" class="now-title"></div>
+        <div id="nextTitle" class="now-next"></div>
+      </div>
+      <button id="btnExitPlayer" class="btn small danger-outline">Keluar</button>
     </div>
   </div>
 </div>
@@ -33,7 +42,10 @@
 <div id="phoneView" class="hidden">
   <header class="phone-header">
     <div class="phone-title">🎤 Karaoke Remote</div>
-    <div id="connDot" class="conn-dot off" title="status koneksi"></div>
+    <div class="conn-right">
+      <button id="btnDisconnect" class="btn small danger-outline">Putus</button>
+      <div id="connDot" class="conn-dot off" title="status koneksi"></div>
+    </div>
   </header>
   <div id="connMsg" class="conn-msg">Menghubungkan ke TV…</div>
 
@@ -47,8 +59,9 @@
   <section id="npCard" class="np-card hidden">
     <div class="np-label">SEDANG DIPUTAR</div>
     <div id="npTitle" class="np-title">—</div>
-    <div class="np-progress"><div id="npBar" class="np-bar"></div></div>
+    <div id="npProgress" class="np-progress"><div id="npBar" class="np-bar"></div></div>
     <div id="npTime" class="np-time">0:00 / 0:00</div>
+    <div class="np-hint">ketuk bilah di atas untuk loncat ke bagian lagu</div>
     <div class="np-controls">
       <button id="btnPrev" class="btn ctrl" title="Sebelumnya">⏮</button>
       <button id="btnPlayPause" class="btn ctrl big" title="Putar/Jeda">⏸</button>
@@ -72,6 +85,30 @@
   </section>
 
   <button id="btnRescan" class="btn ghost hidden" onclick="rescanQr()">Scan Ulang QR TV</button>
+
+  <footer class="phone-footer">
+    <button id="btnAboutPhone" class="btn ghost small">About</button>
+    <button id="btnExitPhone" class="btn ghost small danger-outline">Keluar</button>
+    <span class="phone-version">v1.1.0</span>
+  </footer>
+</div>
+
+<!-- ============ ABOUT (dipakai TV + HP) ============ -->
+<div id="aboutModal" class="about-modal hidden">
+  <div class="about-card">
+    <div id="aboutTitle" class="about-title">🎤 Karaoke for TV</div>
+    <div id="aboutVersion" class="about-version">Versi 1.1.0</div>
+    <p class="about-desc">Karaoke di TV, dikontrol dari HP. Cari lagu tanpa mengganggu layar yang sedang karaoke, dan susun playlist untuk putaran berikutnya.</p>
+    <ul class="about-list">
+      <li>Cari lagu dari HP tanpa ganggu layar</li>
+      <li>Susun playlist untuk putaran berikutnya</li>
+      <li>Pasang &amp; konek mudah — scan QR sekali</li>
+      <li>Ringan di perangkat</li>
+      <li>Support Android 7 ke atas, HP lawas pun bisa</li>
+      <li>Tanpa API · Tanpa login · Gratis</li>
+    </ul>
+    <button id="btnAboutClose" class="btn primary about-close">Tutup</button>
+  </div>
 </div>
 
 <script src="app.js"></script>

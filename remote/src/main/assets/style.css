@@ -6,30 +6,40 @@ button { cursor: pointer; }
 
 /* ---------- TV ---------- */
 #tvView { width: 100vw; height: 100vh; overflow: hidden; }
-.wait-screen { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh; background: #0a0a0a; }
-.wait-title { font-size: 9vh; font-weight: 800; letter-spacing: .08em; color: #fff; }
-.wait-sub { font-size: 3.4vh; color: #bdbdbd; }
-.qr-img { width: 38vh; height: 38vh; background: #fff; padding: 1.5vh; border-radius: 2vh; }
-.wait-code-label { font-size: 2.6vh; color: #9a9a9a; }
-.wait-code { font-size: 7vh; font-weight: 800; letter-spacing: .35em; color: #4ade80; font-family: ui-monospace, monospace; }
-.wait-ip { font-size: 2.2vh; color: #666; }
+.wait-screen { width: 100%; height: 100%; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.2vh; background: radial-gradient(120vh 85vh at 50% 0%, #143322 0%, #0a0a0a 58%, #0a0a0a 100%); }
+.wait-version { position: absolute; left: 3vw; bottom: 3vh; font-size: 2.2vh; color: #5f5f5f; }
+.wait-actions { position: absolute; right: 3vw; bottom: 3vh; display: flex; gap: 1vw; }
+.btn.ghost-tv { background: transparent; border: 2px solid #3a3a3a; color: #e5e5e5; font-size: 2.6vh; padding: 1.1vh 1.8vw; border-radius: 10px; }
+.exit-btn { background: transparent; border: 2px solid #b91c1c; color: #f87171; font-size: 2.6vh; padding: 1.1vh 1.8vw; border-radius: 10px; }
+/* cincin fokus yang jelas buat navigasi D-pad remot TV */
+#tvView button:focus { outline: 3px solid #4ade80; outline-offset: 2px; }
+.wait-countdown { font-size: 2.6vh; color: #fde68a; }
+.wait-title { font-size: 7.5vh; font-weight: 800; letter-spacing: .06em; color: #fff; }
+.wait-sub { font-size: 3.2vh; color: #a3a3a3; }
+.qr-img { width: 36vh; height: 36vh; background: #fff; padding: 1.5vh; border-radius: 2vh; border: 1px solid #2a2a2a; }
+.wait-code-label { font-size: 2.5vh; color: #8a8a8a; }
+.wait-code { font-size: 6.5vh; font-weight: 800; letter-spacing: .35em; color: #4ade80; font-family: ui-monospace, monospace; }
+.wait-ip { font-size: 2.1vh; color: #5f5f5f; }
 .player-screen { width: 100%; height: 100%; position: relative; background: #000; }
 #playerWrap, #player { width: 100%; height: 100%; }
 #playerWrap iframe { width: 100%; height: 100%; border: 0; }
-.now-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 2.5vh 3vw; background: linear-gradient(transparent, rgba(0,0,0,.85)); }
+.now-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 2.5vh 3vw; background: linear-gradient(transparent, rgba(0,0,0,.85)); display: flex; align-items: flex-end; justify-content: space-between; gap: 2vw; }
+.now-text { flex: 1; min-width: 0; }
 .now-title { font-size: 4.2vh; font-weight: 700; }
 .now-next { font-size: 2.6vh; color: #c9c9c9; margin-top: .6vh; }
 
 /* ---------- Phone ---------- */
-#phoneView { min-height: 100vh; padding: 12px 14px 40px; background: #111; }
+#phoneView { min-height: 100vh; padding: 12px 14px 40px; background: #0e0e0e; }
 .phone-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px 12px; }
 .phone-title { font-size: 20px; font-weight: 800; }
+.conn-right { display: flex; align-items: center; gap: 10px; }
+.btn.danger-outline { background: transparent; border: 1px solid #b91c1c; color: #f87171; }
 .conn-dot { width: 14px; height: 14px; border-radius: 50%; background: #f59e0b; }
 .conn-dot.on { background: #22c55e; }
 .conn-dot.off { background: #ef4444; }
 .conn-msg { font-size: 13px; color: #9a9a9a; margin-bottom: 12px; }
 .search-box { display: flex; gap: 8px; }
-.search-box input { flex: 1; padding: 12px; font-size: 16px; border-radius: 10px; border: 1px solid #333; background: #1c1c1c; color: #fff; outline: none; }
+.search-box input { flex: 1; padding: 12px; font-size: 16px; border-radius: 10px; border: 1px solid #2e2e2e; background: #1a1a1a; color: #fff; outline: none; }
 .btn { border: 0; border-radius: 10px; padding: 12px 16px; font-size: 15px; font-weight: 700; background: #262626; color: #fff; }
 .btn.primary { background: #16a34a; }
 .btn.danger { background: #b91c1c; }
@@ -37,18 +47,20 @@ button { cursor: pointer; }
 .btn.ghost { background: transparent; border: 1px solid #555; width: 100%; margin-top: 16px; }
 .search-status { font-size: 13px; color: #9a9a9a; margin: 10px 2px; min-height: 16px; }
 .results { display: flex; flex-direction: column; gap: 8px; }
-.result-item { display: flex; gap: 10px; align-items: center; background: #1c1c1c; border-radius: 12px; padding: 8px; }
+.result-item { display: flex; gap: 10px; align-items: center; background: #1a1a1a; border: 1px solid #262626; border-radius: 12px; padding: 8px; }
 .result-item img { width: 96px; height: 54px; object-fit: cover; border-radius: 8px; background: #000; }
 .result-info { flex: 1; min-width: 0; }
 .result-title { font-size: 14px; font-weight: 700; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .result-meta { font-size: 12px; color: #9a9a9a; margin-top: 4px; }
 .result-add { font-size: 22px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #16a34a; color: #fff; flex-shrink: 0; }
-.np-card { background: #1c1c1c; border-radius: 14px; padding: 14px; margin: 16px 0; }
+.np-card { background: #1a1a1a; border: 1px solid #262626; border-radius: 14px; padding: 14px; margin: 16px 0; }
 .np-label { font-size: 11px; letter-spacing: .12em; color: #9a9a9a; margin-bottom: 6px; }
 .np-title { font-size: 16px; font-weight: 700; line-height: 1.35; }
-.np-progress { height: 6px; background: #333; border-radius: 3px; margin: 12px 0 6px; overflow: hidden; }
-.np-bar { height: 100%; width: 0%; background: #22c55e; }
+.np-progress { position: relative; height: 12px; background: #444; border-radius: 6px; margin: 12px 0 6px; cursor: pointer; }
+.np-progress::before { content: ''; position: absolute; left: 0; right: 0; top: -12px; bottom: -12px; }
+.np-bar { height: 100%; width: 0%; background: #22c55e; border-radius: 6px; }
 .np-time { font-size: 12px; color: #9a9a9a; text-align: right; }
+.np-hint { font-size: 11px; color: #777; margin-top: 4px; }
 .np-controls { display: flex; justify-content: center; gap: 14px; margin: 12px 0; }
 .btn.ctrl { width: 52px; height: 52px; border-radius: 50%; font-size: 20px; padding: 0; background: #2e2e2e; }
 .btn.ctrl.big { width: 64px; height: 64px; font-size: 24px; background: #16a34a; }
@@ -58,7 +70,28 @@ button { cursor: pointer; }
 .queue-sec { margin-top: 8px; }
 .queue-head { display: flex; justify-content: space-between; align-items: center; font-size: 15px; font-weight: 700; margin-bottom: 8px; }
 .queue-list { display: flex; flex-direction: column; gap: 8px; }
-.queue-item { display: flex; gap: 10px; align-items: center; background: #1c1c1c; border-radius: 12px; padding: 8px; }
+.queue-item { display: flex; gap: 10px; align-items: center; background: #1a1a1a; border: 1px solid #262626; border-radius: 12px; padding: 8px; }
+.phone-footer { display: flex; align-items: center; gap: 8px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #222; }
+.phone-footer .btn { width: auto; margin-top: 0; }
+.phone-version { margin-left: auto; font-size: 12px; color: #666; }
+
+/* ---------- About (TV + HP) ---------- */
+.about-modal { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.about-card { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 24px; width: min(92vw, 560px); max-height: 88vh; overflow-y: auto; }
+.about-title { font-size: 22px; font-weight: 800; }
+.about-version { font-size: 13px; color: #8a8a8a; margin: 4px 0 12px; }
+.about-desc { font-size: 15px; line-height: 1.5; color: #c9c9c9; margin-bottom: 14px; }
+.about-list { list-style: none; margin-bottom: 18px; }
+.about-list li { font-size: 14px; line-height: 1.45; color: #d4d4d4; padding: 3px 0; }
+.about-list li::before { content: '✓ '; color: #22c55e; font-weight: 700; }
+.about-close { width: 100%; }
+/* di TV: dialog lebih besar biar kebaca dari sofa */
+.mode-tv .about-card { width: min(92vw, 640px); padding: 4vh 3vw; }
+.mode-tv .about-title { font-size: 5vh; }
+.mode-tv .about-version { font-size: 2.6vh; }
+.mode-tv .about-desc { font-size: 3vh; }
+.mode-tv .about-list li { font-size: 2.9vh; padding: .6vh 0; }
+.mode-tv .about-close { font-size: 3vh; padding: 1.6vh; }
 .queue-item img { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; background: #000; }
 .queue-item .result-title { font-size: 13px; }
 .queue-remove { font-size: 18px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3a3a3a; color: #fff; flex-shrink: 0; }

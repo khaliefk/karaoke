@@ -8,6 +8,10 @@
   var MODE = params.get('mode') === 'phone' ? 'phone' : 'tv';
   var CODE = params.get('code') || '';
   var WS_PORT = 8081;
+  /* Versi aplikasi — UBAH BARENG android:versionName di kedua
+     AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
+  var APP_VERSION = '1.1.0';
+  document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
   function fmt(sec) {
@@ -260,6 +264,11 @@
   function initTv() {
     $('tvView').classList.remove('hidden');
     showTv('wait');
+    /* tombol Keluar: layar QR + bar bawah player, dua-duanya panggil
+       bridge Android yang mematikan service lalu menutup aplikasi */
+    var ex1 = $('btnExitWait'); if (ex1) ex1.onclick = exitApp;
+    var ex2 = $('btnExitPlayer'); if (ex2) ex2.onclick = exitApp;
+    var ab = $('btnAboutWait'); if (ab) ab.onclick = openAbout;
     /* polling /api/info tiap detik: tampilkan kode pairing terbaru +
        hitung mundur rotasi QR, dan jadi cadangan kalau pesan peer_left
        kelewat saat WS TV sedang reconnect */
@@ -500,6 +509,8 @@
     $('phoneView').classList.remove('hidden');
     setConn(false, 'Menghubungkan ke TV…');
     $('btnDisconnect').onclick = disconnectTv;
+    var abp = $('btnAboutPhone'); if (abp) abp.onclick = openAbout;
+    var exp = $('btnExitPhone'); if (exp) exp.onclick = exitApp;
     $('searchBtn').onclick = doSearch;
     $('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
     $('btnPlayPause').onclick = function () {
@@ -539,6 +550,27 @@
   }
   window.rescanQr = rescanQr;
 
+  /* Keluar dari aplikasi TV: panggil bridge Android di MainActivity,
+     yang mematikan service server lalu menutup activity. */
+  function exitApp() {
+    if (window.Android && window.Android.exitApp) { window.Android.exitApp(); }
+  }
+  window.exitApp = exitApp;
+
+  /* ---------- About (TV + HP) ---------- */
+  function openAbout() {
+    var m = $('aboutModal'); if (!m) return;
+    $('aboutTitle').textContent = MODE === 'tv' ? '🎤 Karaoke for TV' : '🎤 Karaoke Remote';
+    $('aboutVersion').textContent = 'Versi ' + APP_VERSION;
+    m.classList.remove('hidden');
+    var c = $('btnAboutClose'); if (c) c.focus(); // fokus ke Tutup (penting buat D-pad TV)
+  }
+  function closeAbout() {
+    var m = $('aboutModal'); if (m) m.classList.add('hidden');
+  }
+  window.openAbout = openAbout;
+  window.closeAbout = closeAbout;
+
   /* ---------- dispatch ---------- */
   function onMsg(msg) {
     if (MODE === 'tv') {
@@ -553,5 +585,9 @@
   }
 
   if (MODE === 'tv') initTv(); else initPhone();
+  /* tombol Tutup + ketuk area gelap di luar kartu = tutup dialog About */
+  var bc = $('btnAboutClose'); if (bc) bc.onclick = closeAbout;
+  var am = $('aboutModal');
+  if (am) am.addEventListener('click', function (e) { if (e.target === am) closeAbout(); });
   connect();
 })();

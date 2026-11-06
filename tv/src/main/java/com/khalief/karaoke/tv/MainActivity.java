@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -61,6 +62,7 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowContentAccess(true);
         webView.setWebChromeClient(new WebChromeClient());
+        webView.addJavascriptInterface(new TvBridge(), "Android");
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request,
@@ -151,6 +153,29 @@ public class MainActivity extends Activity {
             + "<h1>Karaoke for TV</h1>"
             + "<p>Server tidak bisa jalan. Tutup aplikasi ini lalu buka lagi.</p>"
             + "</body></html>";
+
+    /** Keluar bersih: matikan service server lalu tutup activity. */
+    private void exitApp() {
+        stopService(new Intent(this, KaraokeService.class));
+        finish();
+    }
+
+    /** Bridge JS untuk halaman TV: tombol "Keluar" di WebView memanggil ini. */
+    private class TvBridge {
+        @JavascriptInterface
+        public void exitApp() {
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!destroyed) MainActivity.this.exitApp();
+                }
+            });
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        exitApp();
+    }
 
     @Override
     protected void onDestroy() {

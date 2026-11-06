@@ -8,6 +8,10 @@
   var MODE = params.get('mode') === 'phone' ? 'phone' : 'tv';
   var CODE = params.get('code') || '';
   var WS_PORT = 8081;
+  /* Versi aplikasi — UBAH BARENG android:versionName di kedua
+     AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
+  var APP_VERSION = '1.1.0';
+  document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
   function fmt(sec) {
@@ -17,17 +21,18 @@
   }
 
   /* ---------- WebSocket ---------- */
-  var ws = null, wsOk = false, authFailed = false;
+  var ws = null, wsOk = false, authFailed = false, manualDisconnect = false;
 
   function wsUrl() { return 'ws://' + location.hostname + ':' + WS_PORT; }
 
   function connect() {
-    if (authFailed) return;
+    if (authFailed || manualDisconnect) return;
     try { ws = new WebSocket(wsUrl()); } catch (e) { setTimeout(connect, 2000); return; }
     ws.onopen = function () {
       wsOk = true;
       send({ type: 'auth', role: MODE, code: CODE });
       if (MODE === 'phone') { send({ type: 'get_state' }); }
+      var d = $('btnDisconnect'); if (d) d.classList.remove('hidden');
       setConn(true, 'Terhubung ke TV');
     };
     ws.onmessage = function (ev) {
@@ -41,12 +46,34 @@
         authFailed = true;
         setConn(false, 'Kode pairing salah. Scan ulang QR di TV.');
         var b = $('btnRescan'); if (b) b.classList.remove('hidden');
+        var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
+        return;
+      }
+      if (manualDisconnect) {
+        setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
+        var b2 = $('btnRescan'); if (b2) b2.classList.remove('hidden');
         return;
       }
       setConn(false, 'Koneksi putus. Menghubungkan ulang…');
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { /* onclose yang urus reconnect */ };
+  }
+
+  /* Putus manual dari TV: tutup socket, matikan auto-reconnect. TV tetap
+     jalan (lagu/antrean dipegang halaman TV), cuma HP-nya yang putus.
+     Sambung lagi lewat tombol "Scan Ulang QR TV" (halaman di-load ulang). */
+  function disconnectTv() {
+    manualDisconnect = true;
+    wsOk = false;
+    try { if (ws) ws.close(); } catch (e) {}
+    setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
+    var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
+    var b = $('btnRescan'); if (b) b.classList.remove('hidden');
+    var card = $('npCard'); if (card) card.classList.add('hidden');
+    $('queueCount').textContent = '0';
+    $('queueList').innerHTML = '';
+    setSearchStatus('Putus dari TV. TV tetap jalan, cuma HP-nya yang putus.');
   }
 
   function send(obj) {
@@ -57,10 +84,27 @@
   var queue = [], current = null, history = [];
   var playing = false, position = 0, duration = 0, volume = 80;
   var player = null, playerReady = false, ytLoaded = false, pendingVideo = null;
+  var hadPhone = false;   // pernah ada HP terhubung sejak halaman dimuat
+  var lastCode = '';      // kode pairing terakhir yang ditampilkan di layar tunggu
 
   function showTv(id) {
     $('waitScreen').classList.toggle('hidden', id !== 'wait');
     $('playerScreen').classList.toggle('hidden', id !== 'player');
+  }
+
+  /* HP terakhir putus: sesi selesai — matikan lagu, bersihkan antrean,
+     balik ke menu awal (QR). Dipanggil saat server kirim peer_left,
+     dan sebagai cadangan oleh polling /api/info kalau pesan itu kelewat. */
+  function resetSession() {
+    if (player && playerReady) {
+      try { player.stopVideo(); }
+      catch (e) { try { player.pauseVideo(); } catch (e2) {} }
+    }
+    pendingVideo = null;
+    current = null; playing = false; position = 0; duration = 0;
+    queue = []; history = [];
+    showTv('wait');
+    broadcast();
   }
 
   function loadYTApi() {
@@ -78,6 +122,11 @@
 
   function createPlayer(videoId) {
     pendingVideo = null;
+    /* JANGAN PERNAH ada dua player di div yang sama: hancurkan dulu.
+       Tanpa ini, player lama tetap jalan tapi tak terpegang (orphan),
+       sementara `player` menunjuk ke player baru yang gagal init —
+       semua perintah sesudahnya (ganti lagu, next, pause, seek) hilang. */
+    if (player) { try { player.destroy(); } catch (e) {} player = null; playerReady = false; }
     player = new YT.Player('player', {
       videoId: videoId,
       playerVars: { autoplay: 1, controls: 0, fs: 0, rel: 0, modestbranding: 1, playsinline: 1 },
@@ -86,6 +135,8 @@
           playerReady = true;
           try { e.target.setVolume(volume); } catch (err) {}
           e.target.playVideo();
+          /* lagu yang diminta saat player masih init: putar sekarang */
+          if (pendingVideo) { var v = pendingVideo; pendingVideo = null; loadVideoByIdSafe(v); }
         },
         onStateChange: function (e) {
           if (e.data === YT.PlayerState.ENDED) { playNext(); }
@@ -97,9 +148,22 @@
     });
   }
 
+  function loadVideoByIdSafe(videoId) {
+    try {
+      player.loadVideoById(videoId);
+    } catch (e) {
+      /* player rusak: bangun ulang dari nol (destroy dulu di createPlayer) */
+      createPlayer(videoId);
+    }
+  }
+
   function loadVideo(v) {
     if (!player) { pendingVideo = v.videoId; loadYTApi(); if (window.YT && window.YT.Player) createPlayer(v.videoId); return; }
-    try { player.loadVideoById(v.videoId); } catch (e) { createPlayer(v.videoId); }
+    /* player ada tapi belum ready (internet lambat = init bisa makan detik):
+       JANGAN panggil loadVideoById dulu — simpan, onReady yang eksekusi.
+       Dulu di sini langsung dipanggil dan throw-nya bikin player ganda. */
+    if (!playerReady) { pendingVideo = v.videoId; return; }
+    loadVideoByIdSafe(v.videoId);
   }
 
   function playNow(v) {
@@ -169,9 +233,19 @@
       case 'next': playNext(); break;
       case 'prev': playPrev(); break;
       case 'replay': replay(); break;
+      case 'seek':
+        var s = parseFloat(msg.value);
+        if (!isNaN(s) && player && playerReady) {
+          try { player.seekTo(Math.max(0, s), true); } catch (e) {}
+          position = Math.max(0, s); broadcast();
+        }
+        break;
       case 'volume':
         volume = Math.max(0, Math.min(100, parseInt(msg.value, 10) || 0));
-        if (player && playerReady) { try { player.setVolume(volume); } catch (e) {} }
+        if (player && playerReady) {
+          try { if (volume > 0) player.unMute(); } catch (e) {}
+          try { player.setVolume(volume); } catch (e) {}
+        }
         broadcast();
         break;
       case 'queue_remove':
@@ -190,15 +264,38 @@
   function initTv() {
     $('tvView').classList.remove('hidden');
     showTv('wait');
-    fetch('/api/info').then(function (r) { return r.json(); }).then(function (info) {
-      if (info.code) $('pairCode').textContent = String(info.code).split('').join(' ');
-      if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port 8080';
-    }).catch(function () {});
-    // refresh QR tiap 60 detik (kode bisa ganti kalau server restart)
-    setInterval(function () {
-      var img = $('qrImg');
-      img.src = '/qr.png?t=' + Date.now();
-    }, 60000);
+    /* tombol Keluar: layar QR + bar bawah player, dua-duanya panggil
+       bridge Android yang mematikan service lalu menutup aplikasi */
+    var ex1 = $('btnExitWait'); if (ex1) ex1.onclick = exitApp;
+    var ex2 = $('btnExitPlayer'); if (ex2) ex2.onclick = exitApp;
+    var ab = $('btnAboutWait'); if (ab) ab.onclick = openAbout;
+    /* polling /api/info tiap detik: tampilkan kode pairing terbaru +
+       hitung mundur rotasi QR, dan jadi cadangan kalau pesan peer_left
+       kelewat saat WS TV sedang reconnect */
+    function refreshQrInfo() {
+      fetch('/api/info').then(function (r) { return r.json(); }).then(function (info) {
+        if (info.code) {
+          $('pairCode').textContent = String(info.code).split('').join(' ');
+          if (info.code !== lastCode) {
+            lastCode = info.code;
+            $('qrImg').src = '/qr.png?t=' + Date.now();
+          }
+        }
+        if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port 8080';
+        var cd = $('qrCountdown');
+        if (cd) {
+          if (info.phoneConnected) cd.textContent = 'HP terhubung — QR dijeda';
+          else if (typeof info.codeExpiresIn === 'number') cd.textContent = 'QR baru dalam ' + info.codeExpiresIn + ' dtk';
+          else cd.textContent = '';
+        }
+        if (!info.phoneConnected && hadPhone && current) {
+          hadPhone = false;
+          resetSession();
+        }
+      }).catch(function () {});
+    }
+    refreshQrInfo();
+    setInterval(refreshQrInfo, 1000);
     // posisi player tiap 1 detik saat jalan
     setInterval(function () {
       if (player && playerReady && playing) {
@@ -213,7 +310,7 @@
 
   /* ================= MODE PHONE ================= */
   var lastState = null;
-  var searchTimer = null;
+  var volDragging = false;
 
   function setConn(ok, text) {
     var dot = $('connDot');
@@ -230,8 +327,15 @@
     return fetch(url, { signal: ctrl.signal }).finally(function () { clearTimeout(timer); });
   }
 
-  var INVIDIOUS = ['https://vid.puffyan.us', 'https://inv.nadeko.net', 'https://yewtu.be'];
-  var PIPED = ['https://piped.video', 'https://piped.adminforge.de'];
+  /* Instance Invidious yang masih hidup (dicek 6 Nov 2026):
+     - yt.chocolatemoo53.com (api=true, cors=true di registry resmi)
+     - invidious.materialio.us (hasil JSON ok, tapi CORS-nya cuma
+       mengizinkan origin sendiri -> dari HP langsung bakal gagal CORS,
+       makanya pencarian utama lewat proxy server TV /api/search).
+     Yang sudah MATI semua: vid.puffyan.us (timeout), inv.nadeko.net
+     (API dimatikan, 403), yewtu.be (balikin HTML), piped.video +
+     piped.adminforge.de (API mati). Piped sudah tidak dipakai. */
+  var INVIDIOUS = ['https://yt.chocolatemoo53.com', 'https://invidious.materialio.us'];
 
   function pickThumb(thumbs) {
     if (!thumbs || !thumbs.length) return '';
@@ -250,11 +354,13 @@
              duration: x.lengthSeconds || 0, thumb: pickThumb(x.videoThumbnails) };
   }
 
-  function normPiped(x) {
-    var id = '';
-    if (x.url) { var m = x.url.match(/[?&]v=([^&]+)/); if (m) id = m[1]; }
-    return { videoId: id, title: x.title || '', channel: x.uploaderName || '',
-             duration: x.duration || 0, thumb: pickThumb(x.thumbnails) };
+  function showSearchResult(items) {
+    if (items && items.length) {
+      setSearchStatus(items.length + ' lagu ketemu. Ketuk untuk langsung putar, + untuk masuk antrean.');
+      renderResults(items);
+      return true;
+    }
+    return false;
   }
 
   function doSearch() {
@@ -263,14 +369,21 @@
     if (!/karaoke/i.test(q)) q += ' karaoke';
     setSearchStatus('Mencari…');
     $('results').innerHTML = '';
-    searchChain(q).then(function (items) {
-      if (items && items.length) {
-        setSearchStatus(items.length + ' lagu ketemu. Ketuk untuk langsung putar, + untuk masuk antrean.');
-        renderResults(items);
-      } else {
-        setSearchStatus('Pencarian gagal, cek internet / coba lagi.');
-      }
-    });
+    /* Jalur utama: proxy server TV (/api/search) — same-origin, bebas CORS,
+       server yang fetch ke instance Invidious. Kalau proxy kosong/gagal,
+       fallback ke fetch langsung dari HP (instance cadangan). */
+    fetchTimeout('/api/search?q=' + encodeURIComponent(q), 20000)
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (d) {
+        var arr = Array.isArray(d) ? d : [];
+        var items = arr.filter(function (x) { return x.type === 'video' && x.videoId; }).map(normInv);
+        if (showSearchResult(items)) return true;
+        return searchChain(q).then(showSearchResult);
+      })
+      .catch(function () { return searchChain(q).then(showSearchResult); })
+      .then(function (ok) {
+        if (!ok) setSearchStatus('Pencarian gagal, cek internet / coba lagi.');
+      });
   }
 
   function searchChain(q) {
@@ -282,17 +395,6 @@
           .then(function (d) {
             var arr = Array.isArray(d) ? d : [];
             return arr.filter(function (x) { return x.type === 'video' && x.videoId; }).map(normInv);
-          });
-      });
-    });
-    PIPED.forEach(function (base) {
-      chain.push(function () {
-        return fetchTimeout(base + '/api/search?q=' + encodeURIComponent(q), 8000)
-          .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
-          .then(function (d) {
-            var arr = (d && d.items) || [];
-            return arr.filter(function (x) { return x.type === 'stream' && x.url; }).map(normPiped)
-                      .filter(function (x) { return x.videoId; });
           });
       });
     });
@@ -354,7 +456,9 @@
       $('npBar').style.width = (s.duration > 0 ? Math.min(100, (s.position / s.duration) * 100) : 0) + '%';
       $('npTime').textContent = fmt(s.position) + ' / ' + fmt(s.duration);
       $('btnPlayPause').textContent = s.playing ? '⏸' : '▶';
-      if (typeof s.volume === 'number') {
+      /* jangan rebut slider saat user lagi geser: broadcast tiap detik
+         sempat bikin jempol balik ke nilai lama, volume jadi susah diatur */
+      if (typeof s.volume === 'number' && !volDragging) {
         $('volSlider').value = s.volume;
         $('volVal').textContent = s.volume;
       }
@@ -386,8 +490,17 @@
       var rm = document.createElement('button');
       rm.className = 'queue-remove';
       rm.textContent = '✕';
-      rm.onclick = function () { send({ type: 'queue_remove', index: idx }); };
+      rm.onclick = function (ev) {
+        ev.stopPropagation();
+        send({ type: 'queue_remove', index: idx });
+      };
       row.appendChild(img); row.appendChild(t); row.appendChild(rm);
+      /* ketuk baris antrean = putar lagu itu sekarang (keluar dari antrean) */
+      row.onclick = function () {
+        send({ type: 'queue_remove', index: idx });
+        send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
+        setSearchStatus('Memutar dari antrean: ' + it.title);
+      };
       list.appendChild(row);
     });
   }
@@ -395,6 +508,9 @@
   function initPhone() {
     $('phoneView').classList.remove('hidden');
     setConn(false, 'Menghubungkan ke TV…');
+    $('btnDisconnect').onclick = disconnectTv;
+    var abp = $('btnAboutPhone'); if (abp) abp.onclick = openAbout;
+    var exp = $('btnExitPhone'); if (exp) exp.onclick = exitApp;
     $('searchBtn').onclick = doSearch;
     $('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
     $('btnPlayPause').onclick = function () {
@@ -405,11 +521,27 @@
     $('btnPrev').onclick = function () { send({ type: 'prev' }); };
     $('btnReplay').onclick = function () { send({ type: 'replay' }); };
     $('btnClearQueue').onclick = function () { send({ type: 'queue_clear' }); };
-    $('volSlider').addEventListener('input', function () {
+    /* ketuk bilah progres = loncat (seek) ke bagian lagu itu */
+    $('npProgress').addEventListener('click', function (ev) {
+      if (!lastState || !lastState.current || !lastState.duration) return;
+      var r = this.getBoundingClientRect();
+      var frac = (ev.clientX - r.left) / r.width;
+      frac = Math.max(0, Math.min(1, frac));
+      var sec = Math.floor(frac * lastState.duration);
+      send({ type: 'seek', value: sec });
+      setSearchStatus('Loncat ke ' + fmt(sec) + '.');
+    });
+    /* volume: kirim langsung tiap geseran (tanpa debounce), dan tandai
+       saat jempol nempel di slider supaya broadcast tidak merebutnya */
+    var vol = $('volSlider');
+    vol.addEventListener('pointerdown', function () { volDragging = true; });
+    vol.addEventListener('pointerup', function () { volDragging = false; });
+    vol.addEventListener('pointercancel', function () { volDragging = false; });
+    vol.addEventListener('change', function () { volDragging = false; });
+    vol.addEventListener('input', function () {
       var v = parseInt(this.value, 10);
       $('volVal').textContent = v;
-      if (searchTimer) clearTimeout(searchTimer);
-      searchTimer = setTimeout(function () { send({ type: 'volume', value: v }); }, 150);
+      send({ type: 'volume', value: v });
     });
   }
 
@@ -418,10 +550,33 @@
   }
   window.rescanQr = rescanQr;
 
+  /* Keluar dari aplikasi TV: panggil bridge Android di MainActivity,
+     yang mematikan service server lalu menutup activity. */
+  function exitApp() {
+    if (window.Android && window.Android.exitApp) { window.Android.exitApp(); }
+  }
+  window.exitApp = exitApp;
+
+  /* ---------- About (TV + HP) ---------- */
+  function openAbout() {
+    var m = $('aboutModal'); if (!m) return;
+    $('aboutTitle').textContent = MODE === 'tv' ? '🎤 Karaoke for TV' : '🎤 Karaoke Remote';
+    $('aboutVersion').textContent = 'Versi ' + APP_VERSION;
+    m.classList.remove('hidden');
+    var c = $('btnAboutClose'); if (c) c.focus(); // fokus ke Tutup (penting buat D-pad TV)
+  }
+  function closeAbout() {
+    var m = $('aboutModal'); if (m) m.classList.add('hidden');
+  }
+  window.openAbout = openAbout;
+  window.closeAbout = closeAbout;
+
   /* ---------- dispatch ---------- */
   function onMsg(msg) {
     if (MODE === 'tv') {
-      if (msg.type === 'state') return; // state datang dari TV sendiri
+      if (msg.type === 'state' || msg.type === 'hello') return; // dari TV sendiri / server
+      if (msg.type === 'peer_left') { hadPhone = false; resetSession(); return; }
+      hadPhone = true; // perintah dari HP
       tvCommand(msg);
     } else {
       if (msg.type === 'state') renderState(msg);
@@ -430,5 +585,9 @@
   }
 
   if (MODE === 'tv') initTv(); else initPhone();
+  /* tombol Tutup + ketuk area gelap di luar kartu = tutup dialog About */
+  var bc = $('btnAboutClose'); if (bc) bc.onclick = closeAbout;
+  var am = $('aboutModal');
+  if (am) am.addEventListener('click', function (e) { if (e.target === am) closeAbout(); });
   connect();
 })();
