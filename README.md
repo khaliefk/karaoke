@@ -47,3 +47,10 @@ Gradle tidak bisa jalan di VM ini. Sandbox memblokir koneksi TCP antar proses Ja
 ```
 
 Yang dibutuhkan: JDK 17 di `~/.local/jdk17` dan Android SDK (platform 34 + build-tools 34.0.0) di `~/.local/android-sdk`. Library ada di `libs/` (NanoHTTPD, Java-WebSocket, SLF4J, ZXing core). Hasil build masuk ke `apks/`.
+
+## Assets
+
+Unduh APK jadi di sini:
+
+- [Karaoke for TV (karaoke-tv-debug.apk)](https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk) — pasang di TV
+- [Karaoke Remote (karaoke-remote-debug.apk)](https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk) — pasang di HP
