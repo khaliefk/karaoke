@@ -96,7 +96,15 @@ public class MainActivity extends Activity {
                 }
             }
         };
-        registerReceiver(downloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+        // Android 13+ (targetSdk 34): registerReceiver wajib bawa flag
+        // RECEIVER_EXPORTED / RECEIVER_NOT_EXPORTED, kalau tidak aplikasi
+        // crash di onCreate (SecurityException). Broadcast download ini
+        // datang dari sistem, jadi NOT_EXPORTED sudah cukup.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(downloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(downloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+        }
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request,
