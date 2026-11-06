@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.1.0';
+  var APP_VERSION = '1.2.0';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -269,6 +269,8 @@
     var ex1 = $('btnExitWait'); if (ex1) ex1.onclick = exitApp;
     var ex2 = $('btnExitPlayer'); if (ex2) ex2.onclick = exitApp;
     var ab = $('btnAboutWait'); if (ab) ab.onclick = openAbout;
+    var tv = $('tvVersion'); if (tv) tv.textContent = 'v' + installedName();
+    checkForUpdate(false); // cek update tiap aplikasi dibuka
     /* polling /api/info tiap detik: tampilkan kode pairing terbaru +
        hitung mundur rotasi QR, dan jadi cadangan kalau pesan peer_left
        kelewat saat WS TV sedang reconnect */
@@ -511,6 +513,8 @@
     $('btnDisconnect').onclick = disconnectTv;
     var abp = $('btnAboutPhone'); if (abp) abp.onclick = openAbout;
     var exp = $('btnExitPhone'); if (exp) exp.onclick = exitApp;
+    var pv = $('phoneVersion'); if (pv) pv.textContent = 'v' + installedName();
+    checkForUpdate(false); // cek update tiap aplikasi dibuka
     $('searchBtn').onclick = doSearch;
     $('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
     $('btnPlayPause').onclick = function () {
@@ -557,11 +561,107 @@
   }
   window.exitApp = exitApp;
 
+  /* ---------- Update di dalam aplikasi (v1.2.0) ---------- */
+  /* version.json di repo adalah sumber versi terbaru. Aplikasi cek tiap
+     dibuka; kalau ada yang baru, muncul dialog Update. Tombol Update
+     download APK lewat DownloadManager lalu buka installer sistem. */
+  var UPDATE_URL = 'https://raw.githubusercontent.com/khaliefk/karaoke/main/version.json';
+  var pendingUpdate = null; // {version, code, url, notes} kalau ada update baru
+
+  function installedCode() {
+    try {
+      if (window.Android && window.Android.getVersionCode) return window.Android.getVersionCode() | 0;
+    } catch (e) {}
+    return 0;
+  }
+
+  function installedName() {
+    try {
+      if (window.Android && window.Android.getVersionName) {
+        var v = window.Android.getVersionName();
+        if (v) return v;
+      }
+    } catch (e) {}
+    return APP_VERSION;
+  }
+
+  /* manual=true = dari tombol "Cek update" di About (tampilkan status).
+     Diam kalau offline / tidak ada bridge / sudah versi terbaru. */
+  function checkForUpdate(manual) {
+    if (!window.Android || !window.Android.getVersionCode) return;
+    var installed = installedCode();
+    if (!installed) return;
+    var statusEl = $('updateCheckStatus');
+    function setStatus(t) { if (statusEl) statusEl.textContent = t || ''; }
+    if (manual) setStatus('Mengecek update…');
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 8000);
+    fetch(UPDATE_URL + '?t=' + Date.now(), { signal: ctrl.signal })
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (d) {
+        var code = parseInt(d.code, 10) || 0;
+        if (code > installed) {
+          pendingUpdate = {
+            version: d.version || ('v' + code),
+            code: code,
+            url: MODE === 'tv' ? (d.tv || '') : (d.remote || ''),
+            notes: d.notes || ''
+          };
+          if (!pendingUpdate.url) { if (manual) setStatus('Link update tidak tersedia.'); return; }
+          var dismissed = null;
+          try { dismissed = window.localStorage.getItem('karaokeUpdateDismissed'); } catch (e) {}
+          if (manual || String(code) !== dismissed) openUpdateModal();
+        } else {
+          if (manual) setStatus('Sudah versi terbaru (' + installedName() + ').');
+        }
+      })
+      .catch(function () {
+        if (manual) setStatus('Tidak bisa cek update, cek internet lalu coba lagi.');
+      })
+      .finally(function () { clearTimeout(timer); });
+  }
+
+  function openUpdateModal() {
+    var m = $('updateModal'); if (!m || !pendingUpdate) return;
+    var am = $('aboutModal'); if (am) am.classList.add('hidden');
+    $('updateTitle').textContent = 'Update tersedia';
+    $('updateVersion').textContent = 'Versi ' + pendingUpdate.version + ' (yang terinstall ' + installedName() + ')';
+    var n = $('updateNotes');
+    n.textContent = pendingUpdate.notes || '';
+    n.classList.toggle('hidden', !pendingUpdate.notes);
+    $('updateStatus').textContent = '';
+    m.classList.remove('hidden');
+    var b = $('btnUpdateNow'); if (b) b.focus(); // fokus ke Update (penting buat D-pad TV)
+  }
+
+  function closeUpdateModal(dismiss) {
+    var m = $('updateModal'); if (m) m.classList.add('hidden');
+    if (dismiss && pendingUpdate) {
+      try { window.localStorage.setItem('karaokeUpdateDismissed', String(pendingUpdate.code)); } catch (e) {}
+    }
+  }
+
+  function doUpdate() {
+    if (!pendingUpdate || !pendingUpdate.url) return;
+    var st = $('updateStatus');
+    if (window.Android && window.Android.canInstallUnknown && !window.Android.canInstallUnknown()) {
+      if (st) st.textContent = 'Izinkan dulu install dari sumber tak dikenal, lalu ketuk Update lagi.';
+      if (window.Android.openInstallSettings) window.Android.openInstallSettings();
+      return;
+    }
+    if (window.Android && window.Android.startUpdate) {
+      window.Android.startUpdate(pendingUpdate.url);
+      if (st) st.textContent = 'Mengunduh update… cek notifikasi download, lalu ketuk Pasang saat installer muncul.';
+    }
+  }
+  window.checkForUpdate = checkForUpdate;
+
   /* ---------- About (TV + HP) ---------- */
   function openAbout() {
     var m = $('aboutModal'); if (!m) return;
     $('aboutTitle').textContent = MODE === 'tv' ? '🎤 Karaoke for TV' : '🎤 Karaoke Remote';
-    $('aboutVersion').textContent = 'Versi ' + APP_VERSION;
+    $('aboutVersion').textContent = 'Versi ' + installedName();
+    var s = $('updateCheckStatus'); if (s) s.textContent = '';
     m.classList.remove('hidden');
     var c = $('btnAboutClose'); if (c) c.focus(); // fokus ke Tutup (penting buat D-pad TV)
   }
@@ -589,5 +689,11 @@
   var bc = $('btnAboutClose'); if (bc) bc.onclick = closeAbout;
   var am = $('aboutModal');
   if (am) am.addEventListener('click', function (e) { if (e.target === am) closeAbout(); });
+  var cu = $('btnCheckUpdate'); if (cu) cu.onclick = function () { checkForUpdate(true); };
+  /* dialog Update: tombol Update / Nanti + ketuk area gelap = Nanti */
+  var un = $('btnUpdateNow'); if (un) un.onclick = doUpdate;
+  var ul = $('btnUpdateLater'); if (ul) ul.onclick = function () { closeUpdateModal(true); };
+  var um = $('updateModal');
+  if (um) um.addEventListener('click', function (e) { if (e.target === um) closeUpdateModal(true); });
   connect();
 })();

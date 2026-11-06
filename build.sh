@@ -61,6 +61,38 @@ build_app() {
     ls -la "$KARAOKE/apks/karaoke-$app-debug.apk"
 }
 
+# Tulis ulang version.json dari manifest, supaya cek update di dalam
+# aplikasi selalu menunjuk ke versi yang baru di-build. Field "notes"
+# dipertahankan kalau sudah ada. URUTAN RILIS (penting): build dulu,
+# upload APK ke GitHub, BARU push source + version.json — supaya cek
+# update tidak menunjuk ke APK yang belum naik.
+write_version_json() {
+    python3 - "$KARAOKE" <<'PY'
+import json, re, sys
+root = sys.argv[1]
+man = open(root + '/tv/src/main/AndroidManifest.xml').read()
+vn = re.search(r'android:versionName="([^"]+)"', man).group(1)
+vc = int(re.search(r'android:versionCode="(\d+)"', man).group(1))
+vj = root + '/version.json'
+notes = ''
+try:
+    notes = json.load(open(vj)).get('notes', '')
+except Exception:
+    pass
+data = {
+    'version': vn,
+    'code': vc,
+    'tv': 'https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk',
+    'remote': 'https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk',
+    'notes': notes or 'Update di dalam aplikasi: cek versi tiap dibuka, download + pasang dari dalam.',
+}
+json.dump(data, open(vj, 'w'), indent=2, sort_keys=True)
+print('version.json: ' + vn + ' (code ' + str(vc) + ')')
+PY
+}
+
+write_version_json
+
 build_app tv \
     "$LIBS/nanohttpd-2.3.1.jar" \
     "$LIBS/Java-WebSocket-1.5.4.jar" \

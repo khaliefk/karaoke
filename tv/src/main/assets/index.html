@@ -19,7 +19,7 @@
     <div id="pairCode" class="wait-code">------</div>
     <div id="qrCountdown" class="wait-countdown">QR baru dalam 30 dtk</div>
     <div id="waitIp" class="wait-ip"></div>
-    <div class="wait-version">v1.1.0</div>
+    <div class="wait-version" id="tvVersion">v1.2.0</div>
     <div class="wait-actions">
       <button id="btnAboutWait" class="btn ghost-tv">About</button>
       <button id="btnExitWait" class="btn exit-btn">✕ Keluar</button>
@@ -89,7 +89,7 @@
   <footer class="phone-footer">
     <button id="btnAboutPhone" class="btn ghost small">About</button>
     <button id="btnExitPhone" class="btn ghost small danger-outline">Keluar</button>
-    <span class="phone-version">v1.1.0</span>
+    <span class="phone-version" id="phoneVersion">v1.2.0</span>
   </footer>
 </div>
 
@@ -108,6 +108,20 @@
       <li>Tanpa API · Tanpa login · Gratis</li>
     </ul>
     <button id="btnAboutClose" class="btn primary about-close">Tutup</button>
+    <button id="btnCheckUpdate" class="btn ghost about-close">Cek update</button>
+    <div id="updateCheckStatus" class="update-status"></div>
+  </div>
+</div>
+
+<!-- ============ UPDATE (dipakai TV + HP) ============ -->
+<div id="updateModal" class="about-modal hidden">
+  <div class="about-card">
+    <div id="updateTitle" class="about-title">Update tersedia</div>
+    <div id="updateVersion" class="about-version"></div>
+    <p id="updateNotes" class="about-desc"></p>
+    <div id="updateStatus" class="update-status"></div>
+    <button id="btnUpdateNow" class="btn primary about-close">Update sekarang</button>
+    <button id="btnUpdateLater" class="btn ghost about-close">Nanti</button>
   </div>
 </div>
 
