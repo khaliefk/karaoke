@@ -22,6 +22,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -64,6 +65,18 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 startScan();
+            }
+        });
+
+        // v1.3.5: entri kode manual (IP + kode 6 digit dari layar TV).
+        final EditText manualIp = findViewById(R.id.manual_ip);
+        final EditText manualCode = findViewById(R.id.manual_code);
+        Button manualBtn = findViewById(R.id.manual_btn);
+        manualBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                connectManual(manualIp.getText().toString().trim(),
+                        manualCode.getText().toString().trim());
             }
         });
 
@@ -137,6 +150,42 @@ public class MainActivity extends Activity {
         startActivityForResult(i, REQ_SCAN);
     }
 
+    /** v1.3.5: sambung tanpa kamera. IP + kode dibaca user dari layar TV
+        (layar tunggu native v1.3.4 menampilkannya), URL yang dibangun
+        sama persis dengan isi QR. */
+    private void connectManual(String ip, String code) {
+        if (!isValidIp(ip) || code == null || !code.matches("[0-9]{6}")) {
+            Toast.makeText(this, "IP atau kode tidak valid. IP dan kode ada di layar TV.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        stopMicStream();
+        micStreamer = null;
+        tvIp = ip;
+        pairCode = code;
+        showWebView();
+        webView.loadUrl("http://" + ip + ":8080/?mode=phone&code=" + code);
+    }
+
+    private static boolean isValidIp(String ip) {
+        if (ip == null) return false;
+        String[] parts = ip.split("\\.");
+        if (parts.length != 4) return false;
+        for (String p : parts) {
+            if (p.length() == 0 || p.length() > 3) return false;
+            for (int i = 0; i < p.length(); i++) {
+                if (!Character.isDigit(p.charAt(i))) return false;
+            }
+            try {
+                int v = Integer.parseInt(p);
+                if (v < 0 || v > 255) return false;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void showScanView(String message) {
         if (message != null) scanText.setText(message);
         webView.setVisibility(View.GONE);
@@ -187,6 +236,14 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "QR ini bukan QR Karaoke for TV",
                         Toast.LENGTH_LONG).show();
             }
+            return;
+        }
+        if (requestCode == REQ_SCAN && resultCode == RESULT_CANCELED && data != null
+                && "camera".equals(data.getStringExtra("error"))) {
+            // v1.3.5: kamera gagal total setelah 3x coba. Arahkan user
+            // ke entri kode manual di bawah, jangan dibiarkan bingung.
+            showScanView("Kamera tidak bisa dibuka di HP ini. "
+                    + "Masukkan IP TV dan kode 6 digit di bawah.");
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);

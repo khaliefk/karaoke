@@ -35,6 +35,47 @@
             android:backgroundTint="#16A34A"
             android:text="Scan QR TV"
             android:textColor="#FFFFFF" />
+
+        <!-- v1.3.5: entri kode manual. Kalau kamera HP tidak bisa
+             dipakai (FC / pratinjau hitam), user tetap bisa pairing
+             dengan mengetik IP + kode 6 digit yang tampil di layar TV. -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="atau masukkan kode manual"
+            android:textColor="#AAAAAA"
+            android:textSize="15sp" />
+
+        <EditText
+            android:id="@+id/manual_ip"
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="IP TV, contoh 192.168.1.5"
+            android:inputType="textUri"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#888888" />
+
+        <EditText
+            android:id="@+id/manual_code"
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Kode 6 digit di TV"
+            android:inputType="number"
+            android:maxLength="6"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#888888" />
+
+        <Button
+            android:id="@+id/manual_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="#16A34A"
+            android:text="Sambungkan"
+            android:textColor="#FFFFFF" />
     </LinearLayout>
 
 </FrameLayout>

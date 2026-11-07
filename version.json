@@ -1,7 +1,7 @@
 {
-  "code": 9,
+  "code": 10,
   "notes": "Tambah label 'fitur eksperimental' di dekat tombol mic HP.",
   "remote": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk",
   "tv": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk",
-  "version": "1.3.4"
+  "version": "1.3.5"
 }

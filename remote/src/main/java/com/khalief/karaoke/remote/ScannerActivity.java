@@ -113,7 +113,13 @@ public class ScannerActivity extends Activity {
             public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int w, int h) {}
 
             @Override
-            public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) { return true; }
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                // v1.3.5: kembalikan false supaya TextureView sendiri yang
+                // melepas SurfaceTexture. Dulu true tanpa pernah dilepas,
+                // permukaan mati bocor dan pratinjau bisa hitam permanen
+                // di HP tertentu setelah kamera dibuka-tutup.
+                return false;
+            }
 
             @Override
             public void onSurfaceTextureUpdated(SurfaceTexture surface) {}
@@ -192,7 +198,12 @@ public class ScannerActivity extends Activity {
                     try {
                         frameCount++;
                         if (!found && frameCount % 4 == 0) {
-                            String text = decodeYuv(img);
+                            String text = null;
+                            try {
+                                text = decodeYuv(img);
+                            } catch (Throwable ignored) {
+                                // Frame rusak: lewati saja, jangan sampai FC.
+                            }
                             if (text != null) {
                                 found = true;
                                 Intent data = new Intent();
@@ -209,18 +220,54 @@ public class ScannerActivity extends Activity {
             mgr.openCamera(backId, new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(CameraDevice d) {
+                    openRetries = 0;
                     camera = d;
                     startPreview();
                 }
 
                 @Override
-                public void onDisconnected(CameraDevice d) { d.close(); camera = null; }
+                public void onDisconnected(CameraDevice d) {
+                    d.close();
+                    camera = null;
+                    scheduleCameraRetry();
+                }
 
                 @Override
-                public void onError(CameraDevice d, int error) { d.close(); camera = null; }
+                public void onError(CameraDevice d, int error) {
+                    d.close();
+                    camera = null;
+                    scheduleCameraRetry();
+                }
             }, bgHandler);
         } catch (CameraAccessException e) {
-            finish();
+            scheduleCameraRetry();
+        }
+    }
+
+    private int openRetries = 0;
+
+    /** Kamera gagal dibuka / sesi gagal: coba lagi maks 3x, lalu pulang
+        ke MainActivity dengan extra error supaya user diarahkan ke
+        entri kode manual, bukan dibiarkan menatap pratinjau hitam. */
+    private void scheduleCameraRetry() {
+        if (openRetries >= 3) {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    Intent data = new Intent();
+                    data.putExtra("error", "camera");
+                    setResult(RESULT_CANCELED, data);
+                    finish();
+                }
+            });
+            return;
+        }
+        openRetries++;
+        if (bgHandler != null) {
+            bgHandler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (!isFinishing() && camera == null) openCamera();
+                }
+            }, 500);
         }
     }
 
@@ -242,6 +289,7 @@ public class ScannerActivity extends Activity {
         if (camera == null || !textureView.isAvailable()) return;
         try {
             SurfaceTexture st = textureView.getSurfaceTexture();
+            if (st == null) return;
             st.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
             Surface previewSurface = new Surface(st);
             CaptureRequest.Builder b =
@@ -263,7 +311,10 @@ public class ScannerActivity extends Activity {
                         }
 
                         @Override
-                        public void onConfigureFailed(CameraCaptureSession s) {}
+                        public void onConfigureFailed(CameraCaptureSession s) {
+                            session = null;
+                            scheduleCameraRetry();
+                        }
                     }, bgHandler);
         } catch (CameraAccessException ignored) {}
     }
@@ -288,10 +339,16 @@ public class ScannerActivity extends Activity {
         if (stride == w) {
             buf.get(y);
         } else {
-            byte[] row = new byte[stride];
+            // Baris terakhir bidang Y tidak punya padding: baca w byte
+            // per baris, lompat (stride - w) byte padding antar baris.
+            // Kalau dibaca stride byte per baris, baris terakhir melempar
+            // BufferUnderflowException dan aplikasi FC (kena di Moto G45
+            // yang rowStride-nya lebih lebar dari width).
             for (int r = 0; r < h; r++) {
-                buf.get(row);
-                System.arraycopy(row, 0, y, r * w, w);
+                buf.get(y, r * w, w);
+                if (r < h - 1) {
+                    buf.position(buf.position() + (stride - w));
+                }
             }
         }
         return decodeRotations(y, w, h);
