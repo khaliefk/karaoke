@@ -36,6 +36,7 @@ button { cursor: pointer; }
 #micVolVal { font-size: 13px; color: #c9c9c9; width: 30px; text-align: right; flex-shrink: 0; }
 .btn.mic { font-size: 16px; padding: 14px; background: #2e2e2e; }
 .btn.mic.on { background: #b91c1c; }
+.mic-exp { font-size: 11px; color: #e8b64c; border: 1px solid #e8b64c; border-radius: 999px; padding: 3px 8px; flex-shrink: 0; white-space: nowrap; }
 .mic-status { font-size: 13px; color: #9a9a9a; margin-top: 6px; min-height: 16px; }
 /* indikator mic di layar TV: badge kecil pojok kanan atas */
 .mic-badge { position: fixed; top: 2vh; right: 2vw; z-index: 40; background: rgba(185,28,28,.92); color: #fff; font-size: 2.4vh; font-weight: 800; padding: .8vh 1.4vw; border-radius: 999px; }
