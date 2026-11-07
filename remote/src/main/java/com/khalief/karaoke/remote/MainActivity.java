@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     private LinearLayout scanView;
     private TextView scanText;
     private long updateDownloadId = -1;
+    private long installLaunchedId = -1;
     private BroadcastReceiver downloadReceiver;
     /* Mic HP (v1.3.0): alamat TV + kode pairing dari QR yang di-scan,
        dipakai MicStreamer untuk sambung WebSocket sendiri ke TV. */
@@ -74,32 +75,25 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new JsBridge(), "Android");
 
         // Download update selesai -> buka installer sistem.
+        // v1.3.2: receiver ini cuma cadangan. Jalur utama adalah polling
+        // dari halaman web (getUpdateProgress) yang memanggil installUpdate()
+        // begitu status done. Semua jalan keluar yang sama:
+        // launchInstallForDownload(), sekali per download, dan halaman web
+        // selalu diberi tahu hasilnya supaya dialog bisa menampilkan
+        // tombol Pasang kalau installer gagal kebuka sendiri.
         downloadReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context ctx, Intent intent) {
                 long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                 if (id != updateDownloadId) return;
-                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm == null) return;
-                DownloadManager.Query q = new DownloadManager.Query();
-                q.setFilterById(id);
-                android.database.Cursor c = null;
-                try {
-                    c = dm.query(q);
-                    if (c != null && c.moveToFirst()) {
-                        int status = c.getInt(c.getColumnIndex(DownloadManager.COLUMN_STATUS));
-                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                            Uri uri = dm.getUriForDownloadedFile(id);
-                            if (uri != null) {
-                                Intent install = new Intent(Intent.ACTION_VIEW);
-                                install.setDataAndType(uri, "application/vnd.android.package-archive");
-                                install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                startActivity(install);
-                            }
-                        }
+                int status = queryDownloadStatus(id);
+                if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                    if (launchInstallForDownload(id, false)) {
+                        notifyJsUpdateState("installed");
+                    } else {
+                        notifyJsUpdateState("installFailed");
                     }
-                } catch (Exception e) {
-                } finally {
-                    if (c != null) c.close();
+                } else if (status == DownloadManager.STATUS_FAILED) {
+                    notifyJsUpdateState("failed");
                 }
             }
         };
@@ -359,6 +353,104 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        /** Progress download update untuk halaman web, format JSON:
+            {"state":"idle|downloading|done|failed","downloaded":0,"total":0} */
+        @JavascriptInterface
+        public String getUpdateProgress() {
+            String s = "idle";
+            long downloaded = 0;
+            long total = 0;
+            if (updateDownloadId >= 0) {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null) {
+                    DownloadManager.Query q = new DownloadManager.Query();
+                    q.setFilterById(updateDownloadId);
+                    android.database.Cursor c = null;
+                    try {
+                        c = dm.query(q);
+                        if (c != null && c.moveToFirst()) {
+                            int status = c.getInt(c.getColumnIndex(DownloadManager.COLUMN_STATUS));
+                            downloaded = c.getLong(c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                            total = c.getLong(c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                            if (status == DownloadManager.STATUS_SUCCESSFUL) s = "done";
+                            else if (status == DownloadManager.STATUS_FAILED) s = "failed";
+                            else s = "downloading";
+                        }
+                    } catch (Exception e) {
+                    } finally {
+                        if (c != null) c.close();
+                    }
+                }
+            }
+            return "{\"state\":\"" + s + "\",\"downloaded\":" + downloaded + ",\"total\":" + total + "}";
+        }
+
+        /** Buka installer untuk APK update yang sudah selesai di-download.
+            force=false dipakai jalur otomatis (sekali per download);
+            force=true dipakai tombol Pasang (boleh coba lagi). */
+        @JavascriptInterface
+        public boolean installUpdate(boolean force) {
+            return launchInstallForDownload(updateDownloadId, force);
+        }
+    }
+
+    /** Status download update, atau -1 kalau tidak ada catatannya. */
+    private int queryDownloadStatus(long id) {
+        DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+        if (dm == null || id < 0) return -1;
+        DownloadManager.Query q = new DownloadManager.Query();
+        q.setFilterById(id);
+        android.database.Cursor c = null;
+        try {
+            c = dm.query(q);
+            if (c != null && c.moveToFirst()) {
+                return c.getInt(c.getColumnIndex(DownloadManager.COLUMN_STATUS));
+            }
+        } catch (Exception e) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return -1;
+    }
+
+    /** Buka installer sistem untuk APK update yang sudah selesai di-download.
+        Mengembalikan true kalau intent installer berhasil dilempar. Kalau
+        gagal (misal URI tidak ketemu atau tidak ada activity yang menangani),
+        mengembalikan false supaya halaman web bisa menampilkan tombol Pasang
+        dan user tidak dibiarkan menunggu tanpa kabar. */
+    private boolean launchInstallForDownload(long id, boolean force) {
+        if (id < 0) return false;
+        if (!force && id == installLaunchedId) return true;
+        if (queryDownloadStatus(id) != DownloadManager.STATUS_SUCCESSFUL) return false;
+        DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+        if (dm == null) return false;
+        Uri uri = dm.getUriForDownloadedFile(id);
+        if (uri == null) return false;
+        try {
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(install);
+            installLaunchedId = id;
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Teruskan status update ke halaman web (dialog progress). */
+    private void notifyJsUpdateState(final String state) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (webView == null) return;
+                try {
+                    webView.evaluateJavascript(
+                            "window.__updateState && window.__updateState('" + state + "')", null);
+                } catch (Exception ignored) {}
+            }
+        });
     }
 
     private int getAppVersionCode() {
@@ -396,6 +488,7 @@ public class MainActivity extends Activity {
             req.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "karaoke-update.apk");
             req.setMimeType("application/vnd.android.package-archive");
             req.setAllowedOverRoaming(false);
+            installLaunchedId = -1;
             updateDownloadId = dm.enqueue(req);
         } catch (Exception e) {
             // gagal mulai download: user bisa coba lagi dari tombol Update

@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.3.1';
+  var APP_VERSION = '1.3.2';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -661,12 +661,18 @@
   }
   window.exitApp = exitApp;
 
-  /* ---------- Update di dalam aplikasi (v1.2.0) ---------- */
+  /* ---------- Update di dalam aplikasi (v1.2.0, progress + Pasang otomatis v1.3.2) ---------- */
   /* version.json di repo adalah sumber versi terbaru. Aplikasi cek tiap
      dibuka; kalau ada yang baru, muncul dialog Update. Tombol Update
-     download APK lewat DownloadManager lalu buka installer sistem. */
+     download APK lewat DownloadManager, halaman web memantau progress
+     tiap 500 ms (bar + persen di dialog), dan begitu download selesai
+     installer sistem langsung dibuka otomatis. Tombol Pasang tetap ada
+     sebagai cadangan kalau installer gagal kebuka sendiri. */
   var UPDATE_URL = 'https://raw.githubusercontent.com/khaliefk/karaoke/main/version.json';
   var pendingUpdate = null; // {version, code, url, notes} kalau ada update baru
+  var updatePoll = null;      // interval pantau progress download
+  var updateFinished = false; // sudah terminal (done/failed) untuk download ini
+  var updateAutoFired = false; // installUpdate() otomatis sudah dipanggil
 
   function installedCode() {
     try {
@@ -729,7 +735,11 @@
     var n = $('updateNotes');
     n.textContent = pendingUpdate.notes || '';
     n.classList.toggle('hidden', !pendingUpdate.notes);
-    $('updateStatus').textContent = '';
+    if (!updatePoll) { // jangan reset kalau download sedang jalan
+      $('updateStatus').textContent = '';
+      hideUpdateProgress();
+      setUpdateButton('update');
+    }
     m.classList.remove('hidden');
     var b = $('btnUpdateNow'); if (b) b.focus(); // fokus ke Update (penting buat D-pad TV)
   }
@@ -741,6 +751,101 @@
     }
   }
 
+  function setUpdateProgress(pct, label) {
+    var wrap = $('updateProgress'); if (!wrap) return;
+    wrap.classList.remove('hidden');
+    var bar = $('updateProgressBar');
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    var t = $('updateProgressText'); if (t) t.textContent = label || '';
+  }
+
+  function hideUpdateProgress() {
+    var wrap = $('updateProgress'); if (wrap) wrap.classList.add('hidden');
+  }
+
+  /* mode: 'update' | 'downloading' | 'install' | 'retry' */
+  function setUpdateButton(mode) {
+    var b = $('btnUpdateNow'); if (!b) return;
+    if (mode === 'downloading') { b.textContent = 'Mengunduh…'; b.disabled = true; }
+    else if (mode === 'install') { b.textContent = 'Pasang sekarang'; b.disabled = false; b.onclick = installUpdateNow; }
+    else if (mode === 'retry') { b.textContent = 'Coba lagi'; b.disabled = false; b.onclick = doUpdate; }
+    else { b.textContent = 'Update sekarang'; b.disabled = false; b.onclick = doUpdate; }
+  }
+
+  /* Tombol Pasang cadangan: buka lagi installer untuk APK yang sudah selesai di-download. */
+  function installUpdateNow() {
+    if (!window.Android || !window.Android.installUpdate) return;
+    var ok = false;
+    try { ok = !!window.Android.installUpdate(true); } catch (e) {}
+    var st = $('updateStatus');
+    if (st) st.textContent = ok ? 'Installer dibuka, ketuk Pasang.'
+      : 'Installer tidak bisa dibuka. Coba lagi, atau pasang dari notifikasi download.';
+  }
+
+  function stopUpdatePoll() {
+    if (updatePoll) { clearInterval(updatePoll); updatePoll = null; }
+  }
+
+  /* Download selesai: buka installer otomatis sekali, tombol Pasang tetap
+     ada sebagai cadangan. Dipanggil polling dan callback native. */
+  function onUpdateDone() {
+    if (updateFinished) return;
+    updateFinished = true;
+    stopUpdatePoll();
+    setUpdateProgress(100, 'Download selesai');
+    setUpdateButton('install');
+    var st = $('updateStatus');
+    if (!updateAutoFired) {
+      updateAutoFired = true;
+      var ok = false;
+      try { ok = !!(window.Android && window.Android.installUpdate && window.Android.installUpdate(false)); } catch (e) {}
+      if (st) st.textContent = ok ? 'Download selesai. Installer dibuka, ketuk Pasang.'
+        : 'Download selesai, tapi installer tidak terbuka otomatis. Ketuk Pasang sekarang.';
+    } else if (st) {
+      st.textContent = 'Download selesai. Installer dibuka, ketuk Pasang.';
+    }
+  }
+
+  function onUpdateFailed() {
+    if (updateFinished) return;
+    updateFinished = true;
+    stopUpdatePoll();
+    var st = $('updateStatus');
+    if (st) st.textContent = 'Download gagal. Cek internet lalu coba lagi.';
+    setUpdateButton('retry');
+  }
+
+  function pollUpdateProgress() {
+    if (!window.Android || !window.Android.getUpdateProgress) { stopUpdatePoll(); return; }
+    var p = null;
+    try { p = JSON.parse(window.Android.getUpdateProgress()); } catch (e) { return; }
+    if (!p) return;
+    if (p.state === 'done') { onUpdateDone(); return; }
+    if (p.state === 'failed') { onUpdateFailed(); return; }
+    if (p.state === 'downloading') {
+      var pct = (p.total > 0) ? Math.floor(p.downloaded * 100 / p.total) : 0;
+      setUpdateProgress(pct, p.total > 0 ? ('Mengunduh… ' + pct + '%') : 'Mengunduh…');
+      var st = $('updateStatus');
+      if (st) st.textContent = 'Mengunduh update…';
+    }
+  }
+
+  /* Dipanggil native (cadangan polling) saat download selesai / gagal /
+     installer gagal dibuka. */
+  window.__updateState = function (state) {
+    if (state === 'done' || state === 'installed') onUpdateDone();
+    else if (state === 'failed') onUpdateFailed();
+    else if (state === 'installFailed') {
+      if (updateFinished) return;
+      updateFinished = true;
+      stopUpdatePoll();
+      setUpdateProgress(100, 'Download selesai');
+      setUpdateButton('install');
+      var st = $('updateStatus');
+      if (st) st.textContent = 'Download selesai, tapi installer tidak terbuka otomatis. Ketuk Pasang sekarang.';
+    }
+  };
+
   function doUpdate() {
     if (!pendingUpdate || !pendingUpdate.url) return;
     var st = $('updateStatus');
@@ -750,8 +855,16 @@
       return;
     }
     if (window.Android && window.Android.startUpdate) {
+      updateFinished = false;
+      updateAutoFired = false;
       window.Android.startUpdate(pendingUpdate.url);
-      if (st) st.textContent = 'Mengunduh update… cek notifikasi download, lalu ketuk Pasang saat installer muncul.';
+      setUpdateButton('downloading');
+      setUpdateProgress(0, 'Mengunduh…');
+      if (st) st.textContent = 'Mengunduh update…';
+      stopUpdatePoll();
+      if (window.Android.getUpdateProgress) {
+        updatePoll = setInterval(pollUpdateProgress, 500);
+      }
     }
   }
   window.checkForUpdate = checkForUpdate;

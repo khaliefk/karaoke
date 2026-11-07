@@ -1,7 +1,7 @@
 {
-  "code": 6,
-  "notes": "Perbaiki mic HP yang tidak bisa dinyalakan lagi setelah koneksi putus. Delay mic lebih kecil. Volume mic default 50%.",
+  "code": 7,
+  "notes": "Perbaiki update di dalam aplikasi: progress download tampil di dialog, installer Pasang terbuka otomatis saat download selesai.",
   "remote": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk",
   "tv": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk",
-  "version": "1.3.1"
+  "version": "1.3.2"
 }

@@ -99,6 +99,11 @@ button { cursor: pointer; }
 .about-close { width: 100%; }
 .about-card .btn.ghost { margin-top: 8px; }
 .update-status { font-size: 13px; color: #9a9a9a; margin: 10px 2px 0; min-height: 16px; }
+.update-progress { margin: 12px 2px 4px; }
+.update-progress-track { height: 10px; border-radius: 6px; background: #2a2a2a; overflow: hidden; }
+.update-progress-bar { height: 100%; width: 0; border-radius: 6px; background: #22c55e; }
+.update-progress-text { font-size: 13px; color: #9a9a9a; margin-top: 6px; min-height: 16px; }
+.btn:disabled { opacity: .45; }
 /* di TV: dialog lebih besar biar kebaca dari sofa */
 .mode-tv .about-card { width: min(92vw, 640px); padding: 4vh 3vw; }
 .mode-tv .about-title { font-size: 5vh; }
@@ -107,6 +112,8 @@ button { cursor: pointer; }
 .mode-tv .about-list li { font-size: 2.9vh; padding: .6vh 0; }
 .mode-tv .about-close { font-size: 3vh; padding: 1.6vh; }
 .mode-tv .update-status { font-size: 2.6vh; }
+.mode-tv .update-progress-track { height: 2vh; }
+.mode-tv .update-progress-text { font-size: 2.6vh; }
 .queue-item img { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; background: #000; }
 .queue-item .result-title { font-size: 13px; }
 .queue-remove { font-size: 18px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3a3a3a; color: #fff; flex-shrink: 0; }
