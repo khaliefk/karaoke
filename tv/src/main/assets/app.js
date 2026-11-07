@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.2.1';
+  var APP_VERSION = '1.3.0';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -67,6 +67,8 @@
     manualDisconnect = true;
     wsOk = false;
     try { if (ws) ws.close(); } catch (e) {}
+    stopMicNative(); // mic ikut mati saat putus dari TV
+    setMicUi(false, '');
     setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
     var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
     var b = $('btnRescan'); if (b) b.classList.remove('hidden');
@@ -103,8 +105,15 @@
     pendingVideo = null;
     current = null; playing = false; position = 0; duration = 0;
     queue = []; history = [];
+    setMicBadge(false); // mic ikut mati saat sesi selesai
     showTv('wait');
     broadcast();
+  }
+
+  /* Indikator mic HP (v1.3.0): badge kecil di pojok layar TV. */
+  function setMicBadge(on) {
+    var b = $('micBadge');
+    if (b) b.classList.toggle('hidden', !on);
   }
 
   function loadYTApi() {
@@ -314,6 +323,80 @@
   var lastState = null;
   var volDragging = false;
 
+  /* ---------- Mic HP (v1.3.0) ---------- */
+  /* Satu tombol ON/OFF, tanpa setting lain. ON = mic HP aktif, suara
+     dikirim ke TV (keluar lewat speaker TV). OFF = pakai mic wireless
+     beneran di sisi TV. Status asli datang dari native lewat
+     window.__micState (izin ditolak / gagal jalan ikut dilaporkan). */
+  var micOn = false, micBusy = false, micTimer = null;
+  var micVol = 100; // volume mic 0-100%, default 100%
+
+  /* Kirim volume mic ke TV (server teruskan ke AudioTrack mic).
+     Berlaku langsung saat mic ON; kalau mic OFF, nilainya disimpan
+     di TV dan dipakai saat mic dinyalakan lagi. */
+  function sendMicVolume() {
+    send({ type: 'mic_vol', value: micVol });
+  }
+
+  function setMicUi(on, msg) {
+    var b = $('btnMic');
+    if (b) {
+      b.textContent = on ? '🎤 Mic HP: ON' : '🎤 Mic HP: OFF';
+      b.classList.toggle('on', !!on);
+    }
+    var s = $('micStatus');
+    if (s) s.textContent = msg || '';
+  }
+
+  function stopMicNative() {
+    try {
+      if (window.Android && window.Android.setMicOn) window.Android.setMicOn(false);
+    } catch (e) {}
+  }
+
+  /* Dipanggil native (MainActivity) saat status mic berubah. */
+  window.__micState = function (s) {
+    micBusy = false;
+    if (micTimer) { clearTimeout(micTimer); micTimer = null; }
+    if (s === 'on') {
+      micOn = true;
+      setMicUi(true, 'Mic HP nyala — suaramu keluar dari speaker TV.');
+    } else if (s === 'denied') {
+      micOn = false;
+      setMicUi(false, 'Izin mic ditolak. Nyalakan izin Mic di Pengaturan HP kalau mau pakai mic.');
+    } else if (s === 'error') {
+      micOn = false;
+      setMicUi(false, 'Mic gagal jalan, coba lagi.');
+    } else {
+      micOn = false;
+      setMicUi(false, '');
+    }
+  };
+
+  function toggleMic() {
+    if (micBusy) return;
+    if (micOn) {
+      /* OFF: langsung tampilkan OFF, native mematikan stream. */
+      micOn = false;
+      setMicUi(false, '');
+      stopMicNative();
+      return;
+    }
+    /* ON: tunggu konfirmasi native (izin / koneksi), jangan gantung. */
+    if (!window.Android || !window.Android.setMicOn) {
+      setMicUi(false, 'Mic belum didukung di versi ini.');
+      return;
+    }
+    micBusy = true;
+    setMicUi(false, 'Menyalakan mic…');
+    if (micTimer) clearTimeout(micTimer);
+    micTimer = setTimeout(function () {
+      if (micBusy) { micBusy = false; setMicUi(false, 'Mic gagal jalan, coba lagi.'); }
+    }, 5000);
+    try { window.Android.setMicOn(true); sendMicVolume(); }
+    catch (e) { micBusy = false; setMicUi(false, 'Mic gagal jalan, coba lagi.'); }
+  }
+
   function setConn(ok, text) {
     var dot = $('connDot');
     if (dot) dot.className = 'conn-dot ' + (ok ? 'on' : 'off');
@@ -511,6 +594,17 @@
     $('phoneView').classList.remove('hidden');
     setConn(false, 'Menghubungkan ke TV…');
     $('btnDisconnect').onclick = disconnectTv;
+    $('btnMic').onclick = toggleMic; // tombol mic HP (v1.3.0)
+    /* slider volume mic: kirim langsung tiap geseran (tanpa debounce),
+       sama seperti slider volume musik di bawah */
+    var mv = $('micVolSlider');
+    mv.addEventListener('input', function () {
+      micVol = parseInt(this.value, 10);
+      if (isNaN(micVol)) micVol = 100;
+      micVol = Math.max(0, Math.min(100, micVol));
+      $('micVolVal').textContent = micVol;
+      sendMicVolume();
+    });
     var abp = $('btnAboutPhone'); if (abp) abp.onclick = openAbout;
     var exp = $('btnExitPhone'); if (exp) exp.onclick = exitApp;
     var pv = $('phoneVersion'); if (pv) pv.textContent = 'v' + installedName();
@@ -675,7 +769,8 @@
   function onMsg(msg) {
     if (MODE === 'tv') {
       if (msg.type === 'state' || msg.type === 'hello') return; // dari TV sendiri / server
-      if (msg.type === 'peer_left') { hadPhone = false; resetSession(); return; }
+      if (msg.type === 'peer_left') { hadPhone = false; setMicBadge(false); resetSession(); return; }
+      if (msg.type === 'mic') { setMicBadge(!!msg.on); return; } // indikator mic HP
       hadPhone = true; // perintah dari HP
       tvCommand(msg);
     } else {

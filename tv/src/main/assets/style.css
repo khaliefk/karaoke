@@ -28,6 +28,18 @@ button { cursor: pointer; }
 .now-title { font-size: 4.2vh; font-weight: 700; }
 .now-next { font-size: 2.6vh; color: #c9c9c9; margin-top: .6vh; }
 
+/* ---------- Mic HP (v1.3.0) ---------- */
+.mic-sec { margin: 2px 0 14px; }
+.mic-row { display: flex; align-items: center; gap: 10px; }
+.mic-row .btn.mic { flex: 1 1 auto; width: auto; }
+.mic-row input[type=range] { flex: 0 0 110px; accent-color: #ef4444; }
+#micVolVal { font-size: 13px; color: #c9c9c9; width: 30px; text-align: right; flex-shrink: 0; }
+.btn.mic { font-size: 16px; padding: 14px; background: #2e2e2e; }
+.btn.mic.on { background: #b91c1c; }
+.mic-status { font-size: 13px; color: #9a9a9a; margin-top: 6px; min-height: 16px; }
+/* indikator mic di layar TV: badge kecil pojok kanan atas */
+.mic-badge { position: fixed; top: 2vh; right: 2vw; z-index: 40; background: rgba(185,28,28,.92); color: #fff; font-size: 2.4vh; font-weight: 800; padding: .8vh 1.4vw; border-radius: 999px; }
+
 /* ---------- Phone ---------- */
 #phoneView { min-height: 100vh; padding: 12px 14px 40px; background: #0e0e0e; }
 .phone-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px 12px; }

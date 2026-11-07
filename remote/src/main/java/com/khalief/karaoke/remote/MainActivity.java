@@ -36,12 +36,19 @@ public class MainActivity extends Activity {
 
     private static final int REQ_CAMERA = 100;
     private static final int REQ_SCAN = 101;
+    private static final int REQ_MIC = 102;
 
     private WebView webView;
     private LinearLayout scanView;
     private TextView scanText;
     private long updateDownloadId = -1;
     private BroadcastReceiver downloadReceiver;
+    /* Mic HP (v1.3.0): alamat TV + kode pairing dari QR yang di-scan,
+       dipakai MicStreamer untuk sambung WebSocket sendiri ke TV. */
+    private String tvIp;
+    private String pairCode;
+    private boolean pendingMic;
+    private MicStreamer micStreamer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -129,6 +136,7 @@ public class MainActivity extends Activity {
     }
 
     private void startScan() {
+        stopMicStream(); // scan ulang = sesi baru, mic lama harus mati
         Intent i = new Intent(this, ScannerActivity.class);
         startActivityForResult(i, REQ_SCAN);
     }
@@ -155,6 +163,15 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Izin kamera dibutuhkan untuk scan QR",
                         Toast.LENGTH_LONG).show();
             }
+        } else if (requestCode == REQ_MIC) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (pendingMic) startMicStream();
+            } else {
+                // ditolak: beri tahu halaman web, biar tombol balik OFF
+                // dengan pesan sopan. JANGAN crash.
+                jsMicState("denied");
+            }
+            pendingMic = false;
         }
     }
 
@@ -163,6 +180,11 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_SCAN && resultCode == RESULT_OK && data != null) {
             String url = data.getStringExtra("url");
             if (url != null && url.startsWith("http") && url.contains("mode=phone")) {
+                try {
+                    Uri u = Uri.parse(url);
+                    tvIp = u.getHost();
+                    pairCode = u.getQueryParameter("code");
+                } catch (Exception ignored) {}
                 showWebView();
                 webView.loadUrl(url);
             } else {
@@ -185,12 +207,64 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopMicStream();
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception e) {}
             downloadReceiver = null;
         }
         if (webView != null) webView.destroy();
         super.onDestroy();
+    }
+
+    /* ---------- Mic HP (v1.3.0) ---------- */
+
+    /** Dipanggil dari halaman web saat user menekan tombol mic ON/OFF. */
+    private void setMic(boolean on) {
+        if (!on) {
+            stopMicStream();
+            return;
+        }
+        if (tvIp == null || pairCode == null) {
+            jsMicState("error");
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+            startMicStream();
+        } else {
+            pendingMic = true;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+        }
+    }
+
+    private void startMicStream() {
+        if (micStreamer == null) {
+            micStreamer = new MicStreamer(tvIp, pairCode, new MicStreamer.Listener() {
+                @Override
+                public void onMicState(final String state) {
+                    jsMicState(state);
+                }
+            });
+        }
+        micStreamer.start();
+    }
+
+    private void stopMicStream() {
+        if (micStreamer != null) micStreamer.stop();
+    }
+
+    /** Teruskan status mic ke halaman web (tombol + pesan). */
+    private void jsMicState(final String state) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (webView == null) return;
+                try {
+                    webView.evaluateJavascript(
+                            "window.__micState && window.__micState('" + state + "')", null);
+                } catch (Exception ignored) {}
+            }
+        });
     }
 
     /** Dipanggil dari halaman web saat user menekan "Scan Ulang QR TV". */
@@ -201,6 +275,18 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     startScan();
+                }
+            });
+        }
+
+        /** Mic HP on/off (v1.3.0). Berjalan di thread binder, jadi
+            dilempar ke UI thread dulu. */
+        @JavascriptInterface
+        public void setMicOn(final boolean on) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    setMic(on);
                 }
             });
         }

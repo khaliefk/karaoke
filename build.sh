@@ -100,6 +100,8 @@ build_app tv \
     "$LIBS/core-3.5.2.jar"
 
 build_app remote \
-    "$LIBS/core-3.5.2.jar"
+    "$LIBS/core-3.5.2.jar" \
+    "$LIBS/Java-WebSocket-1.5.4.jar" \
+    "$LIBS/slf4j-api-1.7.36.jar"
 
 echo "SELESAI"

@@ -21,6 +21,7 @@ public class KaraokeService extends Service {
     private static final int NOTIF_ID = 1;
 
     private KaraokeServer server;
+    private MicPlayer micPlayer;
     private String code;
     private String ip;
 
@@ -56,6 +57,11 @@ public class KaraokeService extends Service {
         };
 
         server = new KaraokeServer(ip, code, assets, qr);
+        /* Mic HP (v1.3.0): suara mentah dari HP diputar via AudioTrack
+           low-latency. Kalau mic tidak pernah dipakai, MicPlayer cuma
+           menunggu dan tidak membuat AudioTrack. */
+        micPlayer = new MicPlayer();
+        server.setMicListener(micPlayer);
         try {
             server.start();
         } catch (Exception e) {
@@ -70,6 +76,10 @@ public class KaraokeService extends Service {
 
     @Override
     public void onDestroy() {
+        if (micPlayer != null) {
+            micPlayer.destroy();
+            micPlayer = null;
+        }
         if (server != null) server.stop();
         super.onDestroy();
     }

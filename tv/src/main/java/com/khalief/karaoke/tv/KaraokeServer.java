@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
@@ -29,6 +30,19 @@ public class KaraokeServer {
     public interface QrProvider {
         byte[] getQrPng() throws Exception;
     }
+
+    /** Mic HP (v1.3.0): suara mentah dari HP diteruskan ke sisi native TV
+        untuk diputar via AudioTrack. Server tetap bebas API Android. */
+    public interface MicListener {
+        void onMicAudio(byte[] data, int length);
+        void onMicState(boolean on);
+        /** Volume mic 0.0-1.0, berlaku langsung walau mic sedang ON. */
+        void onMicVolume(float volume);
+    }
+
+    private volatile MicListener micListener;
+
+    public void setMicListener(MicListener l) { micListener = l; }
 
     public static final int HTTP_PORT = 8080;
     public static final int WS_PORT = 8081;
@@ -300,6 +314,11 @@ public class KaraokeServer {
         private final Set<WebSocket> authed =
                 Collections.newSetFromMap(new ConcurrentHashMap<WebSocket, Boolean>());
         private final Map<WebSocket, String> roles = new ConcurrentHashMap<>();
+        /* Koneksi mic native HP (auth dengan "mic":true): ditandai supaya
+           saat koneksi ini putus, TV tahu mic berhenti walau UI HP masih
+           terhubung. */
+        private final Set<WebSocket> micConns =
+                Collections.newSetFromMap(new ConcurrentHashMap<WebSocket, Boolean>());
 
         KaraokeWsServer(InetSocketAddress addr, KaraokeServer parent) {
             super(addr);
@@ -325,6 +344,15 @@ public class KaraokeServer {
             String role = roles.get(conn);
             authed.remove(conn);
             roles.remove(conn);
+            /* Koneksi mic putus (HP mati / stream dimatikan): matikan
+               pemutaran mic di TV + hilangkan indikator di layar TV. */
+            if (micConns.remove(conn)) {
+                MicListener l = parent.micListener;
+                if (l != null) {
+                    try { l.onMicState(false); } catch (Exception ignored) {}
+                }
+                sendToTv("{\"type\":\"mic\",\"on\":false}");
+            }
             if ("phone".equals(role)) {
                 parent.phoneDisconnected();
             }
@@ -350,6 +378,9 @@ public class KaraokeServer {
                     if (parent.checkCode(got)) {
                         authed.add(conn);
                         roles.put(conn, "phone");
+                        if (Boolean.TRUE.equals(jsonBool(message, "mic"))) {
+                            micConns.add(conn);
+                        }
                         parent.phoneConnected();
                         conn.send("{\"type\":\"hello\",\"ok\":true}");
                     } else {
@@ -360,6 +391,23 @@ public class KaraokeServer {
                 conn.close(4001, "bad auth");
                 return;
             }
+            /* Mic HP on/off: beri tahu sisi native TV (putar/berhenti
+               AudioTrack) lalu teruskan ke halaman TV untuk indikator. */
+            if ("mic".equals(jsonField(message, "type"))) {
+                Boolean on = jsonBool(message, "on");
+                if (on != null && parent.micListener != null) {
+                    try { parent.micListener.onMicState(on); } catch (Exception ignored) {}
+                }
+            }
+            /* Volume mic (0-100): beri tahu sisi native TV, diterapkan
+               sebagai gain AudioTrack mic, berlaku langsung saat mic ON. */
+            if ("mic_vol".equals(jsonField(message, "type"))) {
+                Integer v = jsonInt(message, "value");
+                if (v != null && parent.micListener != null) {
+                    float vol = Math.max(0, Math.min(100, v)) / 100f;
+                    try { parent.micListener.onMicVolume(vol); } catch (Exception ignored) {}
+                }
+            }
             // relay ke semua klien lain yang sudah auth
             Collection<WebSocket> all = getConnections();
             for (WebSocket c : all) {
@@ -369,12 +417,27 @@ public class KaraokeServer {
             }
         }
 
+        /* Frame biner dari HP: suara mic mentah (PCM 16-bit mono 16kHz,
+           10ms per frame). Diteruskan ke sisi native TV saja, TIDAK
+           di-relay ke halaman web (halaman cuma butuh indikator on/off). */
+        @Override
+        public void onMessage(WebSocket conn, ByteBuffer bytes) {
+            if (!authed.contains(conn)) return;
+            if (!"phone".equals(roles.get(conn))) return;
+            MicListener l = parent.micListener;
+            if (l == null) return;
+            byte[] data = new byte[bytes.remaining()];
+            bytes.get(data);
+            try { l.onMicAudio(data, data.length); } catch (Exception ignored) {}
+        }
+
         @Override
         public void onError(WebSocket conn, Exception ex) {
             // koneksi bermasalah: bersihkan dari daftar
             if (conn != null) {
                 authed.remove(conn);
                 roles.remove(conn);
+                micConns.remove(conn);
             }
         }
 
@@ -397,5 +460,38 @@ public class KaraokeServer {
         int q2 = json.indexOf('"', q1 + 1);
         if (q2 < 0) return null;
         return json.substring(q1 + 1, q2);
+    }
+
+    /** Ambil nilai field boolean sederhana dari JSON datar ("on":true). */
+    static Boolean jsonBool(String json, String name) {
+        if (json == null) return null;
+        String key = "\"" + name + "\"";
+        int i = json.indexOf(key);
+        if (i < 0) return null;
+        int c = json.indexOf(':', i + key.length());
+        if (c < 0) return null;
+        int j = c + 1;
+        while (j < json.length() && Character.isWhitespace(json.charAt(j))) j++;
+        if (json.startsWith("true", j)) return Boolean.TRUE;
+        if (json.startsWith("false", j)) return Boolean.FALSE;
+        return null;
+    }
+
+    /** Ambil nilai field angka bulat dari JSON datar ("value":75). */
+    static Integer jsonInt(String json, String name) {
+        if (json == null) return null;
+        String key = "\"" + name + "\"";
+        int i = json.indexOf(key);
+        if (i < 0) return null;
+        int c = json.indexOf(':', i + key.length());
+        if (c < 0) return null;
+        int j = c + 1;
+        while (j < json.length() && Character.isWhitespace(json.charAt(j))) j++;
+        int k = j;
+        if (k < json.length() && json.charAt(k) == '-') k++;
+        while (k < json.length() && Character.isDigit(json.charAt(k))) k++;
+        if (k == j) return null;
+        try { return Integer.parseInt(json.substring(j, k)); }
+        catch (Exception e) { return null; }
     }
 }
