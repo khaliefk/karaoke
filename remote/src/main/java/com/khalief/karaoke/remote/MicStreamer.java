@@ -12,11 +12,10 @@ import org.java_websocket.handshake.ServerHandshake;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Mic HP -> TV (v1.3.0). Delay dijaga seminimal mungkin:
+ * Mic HP -> TV (v1.3.1). Delay dijaga seminimal mungkin:
  * - Suara dikirim MENTAH sebagai PCM 16-bit mono 16kHz, TANPA codec/encode.
  * - Frame kecil 10ms (160 sampel = 320 byte) per pesan biner lewat
  *   WebSocket yang sudah ada (port 8081). Tanpa channel UDP baru.
@@ -25,9 +24,19 @@ import java.util.concurrent.TimeUnit;
  *
  * Alur: connect WS -> auth (role phone + "mic":true) -> kirim
  * {"type":"mic","on":true} -> mulai rekam & kirim frame biner.
- * Berhenti: kirim {"type":"mic","on":false} -> tutup WS -> lepas recorder.
+ * Berhenti: kirim mic-off ke TV, tutup WS, lepas recorder.
  * Semua callback status ("on"/"off"/"denied"/"error") diteruskan ke
  * Listener; pemanggil yang menampilkan pesan ke user.
+ *
+ * v1.3.1: start() idempotent dan anti-macet (perbaiki bug v1.3.0).
+ * Tiap start() menaikkan generasi; loop lama yang masih jalan jadi
+ * basi dan keluar sendiri tanpa boleh menyentuh state generasi baru.
+ * Soket dan recorder dipegang per generasi (salinan lokal), jadi
+ * cleanup generasi lama tidak bisa merusak generasi baru. Ini
+ * memperbaiki bug: setelah layanan putus (kode pairing ikut
+ * berotasi), mic tidak bisa di-ON-kan lagi sampai aplikasi
+ * di-restart. MainActivity juga membuat MicStreamer baru di tiap
+ * start, supaya kode pairing yang dipakai selalu yang terbaru.
  */
 public class MicStreamer {
 
@@ -44,17 +53,15 @@ public class MicStreamer {
     private final String code;
     private final Listener listener;
 
-    private volatile boolean streaming;
+    private volatile int generation;
+    private volatile boolean streaming; // ada loop kontrol generasi aktif
     private volatile boolean wantStop;
-    private volatile boolean authed;
-    private volatile boolean wsClosed;
-    private volatile boolean live; // sudah kirim "on" ke UI
 
-    private WebSocketClient ws;
-    private AudioRecord recorder;
-    private AcousticEchoCanceler aec;
-    private NoiseSuppressor ns;
-    private Thread recordThread;
+    /* Handle ke koneksi/recorder generasi berjalan, supaya stop() bisa
+       mematikannya dari thread lain. Loop kontrol memakai salinan lokal
+       dan membersihkannya sendiri. */
+    private volatile WebSocketClient currentWs;
+    private volatile AudioRecord currentRecorder;
 
     public MicStreamer(String tvIp, String code, Listener listener) {
         this.wsUrl = "ws://" + tvIp + ":8081";
@@ -62,167 +69,201 @@ public class MicStreamer {
         this.listener = listener;
     }
 
+    /** Idempotent: boleh dipanggil kapan saja, termasuk saat generasi
+        lama masih winding down. Generasi lama dimatikan dulu (soket
+        ditutup, recorder di-stop); loop lamanya keluar sendiri karena
+        generasinya sudah basi, tanpa menyentuh state generasi baru. */
     public synchronized void start() {
-        if (streaming) return;
-        streaming = true;
+        generation++;
+        final int gen = generation;
+        wantStop = true;
+        try { if (currentWs != null) currentWs.close(); } catch (Exception ignored) {}
+        stopCurrentRecorder();
         wantStop = false;
-        authed = false;
-        wsClosed = false;
-        live = false;
+        streaming = true;
         new Thread(new Runnable() {
-            @Override public void run() { controlLoop(); }
+            @Override public void run() { controlLoop(gen); }
         }, "mic-control").start();
     }
 
     /** Berhenti: kirim mic-off ke TV, tutup WS, lepas recorder. */
     public synchronized void stop() {
+        generation++;
         wantStop = true;
         try {
-            if (ws != null && ws.isOpen()) ws.send("{\"type\":\"mic\",\"on\":false}");
+            if (currentWs != null && currentWs.isOpen()) {
+                currentWs.send("{\"type\":\"mic\",\"on\":false}");
+            }
         } catch (Exception ignored) {}
-        try { if (ws != null) ws.close(); } catch (Exception ignored) {}
-        stopRecorder();
+        try { if (currentWs != null) currentWs.close(); } catch (Exception ignored) {}
+        stopCurrentRecorder();
     }
 
     private void notifyState(String state) {
         try { listener.onMicState(state); } catch (Exception ignored) {}
     }
 
-    private void controlLoop() {
-        try {
-            ws = new MicWsClient(new URI(wsUrl));
-            if (!ws.connectBlocking(5, TimeUnit.SECONDS)) {
-                if (!live) notifyState("error");
-                return;
-            }
-            long deadline = System.currentTimeMillis() + 3000;
-            while (!authed && !wantStop && !wsClosed
-                    && System.currentTimeMillis() < deadline) {
-                try { Thread.sleep(50); } catch (InterruptedException e) { return; }
-            }
-            if (wantStop || wsClosed || !authed) {
-                if (!live) notifyState(wantStop ? "off" : "error");
-                return;
-            }
-            ws.send("{\"type\":\"mic\",\"on\":true}");
-            if (!startRecorder()) {
-                if (!live) notifyState("error");
-                return;
-            }
-            live = true;
-            notifyState("on");
-            while (!wantStop && !wsClosed) {
-                try { Thread.sleep(100); } catch (InterruptedException e) { break; }
-            }
-        } catch (Exception e) {
-            if (!live) notifyState("error");
-        } finally {
-            stopRecorder();
-            try { if (ws != null) ws.close(); } catch (Exception ignored) {}
-            streaming = false;
-            /* Stream sempat jalan lalu putus sendiri (bukan dimatikan user):
-               beri tahu UI supaya tombol balik OFF. */
-            if (live && !wantStop) notifyState("off");
+    private void stopCurrentRecorder() {
+        AudioRecord r = currentRecorder;
+        if (r != null) {
+            try { r.stop(); } catch (Exception ignored) {}
         }
     }
 
-    private boolean startRecorder() {
+    /** Satu sesi rekam: recorder + AEC/NS yang menempel di sesinya.
+        Dilepas oleh thread rekam yang memakainya (finally), jadi tidak
+        ada tabrakan antar generasi. */
+    private static class MicSession {
+        AudioRecord recorder;
+        AcousticEchoCanceler aec;
+        NoiseSuppressor ns;
+    }
+
+    private void releaseSession(MicSession s) {
+        if (s == null) return;
+        if (s.aec != null) {
+            try { s.aec.release(); } catch (Exception ignored) {}
+            s.aec = null;
+        }
+        if (s.ns != null) {
+            try { s.ns.release(); } catch (Exception ignored) {}
+            s.ns = null;
+        }
+        if (s.recorder != null) {
+            try { s.recorder.stop(); } catch (Exception ignored) {}
+            try { s.recorder.release(); } catch (Exception ignored) {}
+            if (currentRecorder == s.recorder) currentRecorder = null;
+            s.recorder = null;
+        }
+    }
+
+    private void controlLoop(final int gen) {
+        MicWsClient myWs = null;
+        MicSession session = null;
+        boolean wasLive = false;
+        try {
+            myWs = new MicWsClient(new URI(wsUrl));
+            currentWs = myWs;
+            if (!myWs.connectBlocking(5, TimeUnit.SECONDS)) {
+                if (gen == generation && !wasLive) notifyState("error");
+                return;
+            }
+            long deadline = System.currentTimeMillis() + 3000;
+            while (gen == generation && !wantStop && !myWs.closed && !myWs.authed
+                    && System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(50); } catch (InterruptedException e) { return; }
+            }
+            if (gen != generation || wantStop || myWs.closed || !myWs.authed) {
+                if (gen == generation && !wasLive) notifyState(wantStop ? "off" : "error");
+                return;
+            }
+            myWs.send("{\"type\":\"mic\",\"on\":true}");
+            session = startRecorder(gen, myWs);
+            if (session == null) {
+                if (gen == generation && !wasLive) notifyState("error");
+                return;
+            }
+            wasLive = true;
+            notifyState("on");
+            /* Jaga juga kondisi soket (isOpen), bukan cuma flag close:
+               soket yang mati diam-diam tidak boleh menggantung loop. */
+            while (gen == generation && !wantStop && !myWs.closed && myWs.isOpen()) {
+                try { Thread.sleep(100); } catch (InterruptedException e) { break; }
+            }
+        } catch (Exception e) {
+            if (gen == generation && !wasLive) notifyState("error");
+        } finally {
+            if (session != null) releaseSession(session);
+            try { if (myWs != null) myWs.close(); } catch (Exception ignored) {}
+            /* Hanya generasi aktif yang boleh mengubah state bersama.
+               Generasi basi diam saja: generasi baru yang punya kendali. */
+            if (gen == generation) {
+                streaming = false;
+                /* Stream sempat jalan lalu putus sendiri (bukan dimatikan
+                   user): beri tahu UI supaya tombol balik OFF. */
+                if (wasLive && !wantStop) notifyState("off");
+            }
+        }
+    }
+
+    private MicSession startRecorder(final int gen, final MicWsClient ws) {
+        MicSession s = new MicSession();
         try {
             int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            if (minBuf <= 0) return false;
+            if (minBuf <= 0) return null;
             int bufSize = Math.max(minBuf, FRAME_BYTES * 2);
-            recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+            s.recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize);
-            if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                releaseRecorder();
-                return false;
+            if (s.recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+                releaseSession(s);
+                return null;
             }
             try {
                 if (AcousticEchoCanceler.isAvailable()) {
-                    aec = AcousticEchoCanceler.create(recorder.getAudioSessionId());
-                    if (aec != null) aec.setEnabled(true);
+                    s.aec = AcousticEchoCanceler.create(s.recorder.getAudioSessionId());
+                    if (s.aec != null) s.aec.setEnabled(true);
                 }
             } catch (Exception ignored) {}
             try {
                 if (NoiseSuppressor.isAvailable()) {
-                    ns = NoiseSuppressor.create(recorder.getAudioSessionId());
-                    if (ns != null) ns.setEnabled(true);
+                    s.ns = NoiseSuppressor.create(s.recorder.getAudioSessionId());
+                    if (s.ns != null) s.ns.setEnabled(true);
                 }
             } catch (Exception ignored) {}
-            recorder.startRecording();
-            recordThread = new Thread(new Runnable() {
-                @Override public void run() { recordLoop(); }
+            s.recorder.startRecording();
+            currentRecorder = s.recorder;
+            final MicSession session = s;
+            Thread t = new Thread(new Runnable() {
+                @Override public void run() { recordLoop(session, ws, gen); }
             }, "mic-record");
-            recordThread.start();
-            return true;
+            t.start();
+            return s;
         } catch (SecurityException e) {
             // izin mic dicabut di tengah jalan
-            releaseRecorder();
-            return false;
+            releaseSession(s);
+            return null;
         } catch (Exception e) {
-            releaseRecorder();
-            return false;
+            releaseSession(s);
+            return null;
         }
     }
 
-    private void recordLoop() {
+    private void recordLoop(MicSession s, MicWsClient ws, final int gen) {
         short[] pcm = new short[FRAME_SAMPLES];
-        byte[] bytes = new byte[FRAME_BYTES];
-        while (!wantStop) {
-            int n;
-            try {
-                n = recorder.read(pcm, 0, FRAME_SAMPLES);
-            } catch (Exception e) {
-                break;
-            }
-            if (n <= 0) {
-                if (n < 0) break; // ERROR_INVALID_OPERATION / ERROR_BAD_VALUE
-                continue;
-            }
-            if (ws == null || !ws.isOpen()) break;
-            ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-                    .asShortBuffer().put(pcm, 0, n);
-            try {
-                if (n == FRAME_SAMPLES) {
-                    ws.send(bytes);
-                } else {
-                    ws.send(Arrays.copyOf(bytes, n * 2));
+        try {
+            while (gen == generation && !wantStop) {
+                int n;
+                try {
+                    n = s.recorder.read(pcm, 0, FRAME_SAMPLES);
+                } catch (Exception e) {
+                    break;
                 }
-            } catch (Exception e) {
-                break;
+                if (n <= 0) {
+                    if (n < 0) break; // ERROR_INVALID_OPERATION / ERROR_BAD_VALUE
+                    continue;
+                }
+                if (ws == null || !ws.isOpen()) break;
+                /* Array baru tiap frame: jangan pakai buffer bersama yang
+                   bisa ditimpa sebelum soket sempat mengirimnya. */
+                byte[] bytes = new byte[n * 2];
+                ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                        .asShortBuffer().put(pcm, 0, n);
+                try {
+                    ws.send(bytes);
+                } catch (Exception e) {
+                    break;
+                }
             }
-        }
-    }
-
-    private synchronized void stopRecorder() {
-        AudioRecord r = recorder;
-        if (r != null) {
-            try { r.stop(); } catch (Exception ignored) {}
-        }
-        if (recordThread != null) {
-            try { recordThread.join(500); } catch (InterruptedException ignored) {}
-            recordThread = null;
-        }
-        releaseRecorder();
-    }
-
-    private void releaseRecorder() {
-        if (aec != null) {
-            try { aec.release(); } catch (Exception ignored) {}
-            aec = null;
-        }
-        if (ns != null) {
-            try { ns.release(); } catch (Exception ignored) {}
-            ns = null;
-        }
-        if (recorder != null) {
-            try { recorder.release(); } catch (Exception ignored) {}
-            recorder = null;
+        } finally {
+            releaseSession(s);
         }
     }
 
     private class MicWsClient extends WebSocketClient {
+        volatile boolean authed;
+        volatile boolean closed;
+
         MicWsClient(URI uri) { super(uri); }
 
         @Override
@@ -245,7 +286,7 @@ public class MicStreamer {
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
-            wsClosed = true;
+            closed = true;
         }
 
         @Override

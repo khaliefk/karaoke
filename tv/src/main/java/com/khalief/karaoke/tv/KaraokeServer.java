@@ -345,8 +345,11 @@ public class KaraokeServer {
             authed.remove(conn);
             roles.remove(conn);
             /* Koneksi mic putus (HP mati / stream dimatikan): matikan
-               pemutaran mic di TV + hilangkan indikator di layar TV. */
-            if (micConns.remove(conn)) {
+               pemutaran mic di TV + hilangkan indikator di layar TV.
+               v1.3.1: hanya kalau tidak ada lagi koneksi mic lain -
+               kalau HP baru saja auth mic pengganti, jangan kirim
+               mic-off palsu yang mematikan mic yang baru jalan. */
+            if (micConns.remove(conn) && micConns.isEmpty()) {
                 MicListener l = parent.micListener;
                 if (l != null) {
                     try { l.onMicState(false); } catch (Exception ignored) {}
@@ -379,6 +382,16 @@ public class KaraokeServer {
                         authed.add(conn);
                         roles.put(conn, "phone");
                         if (Boolean.TRUE.equals(jsonBool(message, "mic"))) {
+                            /* Hanya satu HP dalam satu sesi: koneksi mic
+                               lama yang masih tercatat (mis. soket
+                               setengah mati) dibuang supaya tidak
+                               menyangkut saat HP sambung ulang mic. */
+                            for (WebSocket old : new java.util.ArrayList<>(micConns)) {
+                                if (old != conn && old.isOpen()) {
+                                    try { old.close(4000, "mic replaced"); }
+                                    catch (Exception ignored) {}
+                                }
+                            }
                             micConns.add(conn);
                         }
                         parent.phoneConnected();
@@ -424,6 +437,7 @@ public class KaraokeServer {
         public void onMessage(WebSocket conn, ByteBuffer bytes) {
             if (!authed.contains(conn)) return;
             if (!"phone".equals(roles.get(conn))) return;
+            if (!micConns.contains(conn)) return; // hanya koneksi mic
             MicListener l = parent.micListener;
             if (l == null) return;
             byte[] data = new byte[bytes.remaining()];
@@ -433,11 +447,19 @@ public class KaraokeServer {
 
         @Override
         public void onError(WebSocket conn, Exception ex) {
-            // koneksi bermasalah: bersihkan dari daftar
+            // koneksi bermasalah: bersihkan dari daftar. v1.3.1: kalau
+            // yang rusak itu koneksi mic, beri tahu TV seperti onClose
+            // (dulu cuma dihapus diam-diam, mic bisa nyangkut jalan).
             if (conn != null) {
                 authed.remove(conn);
                 roles.remove(conn);
-                micConns.remove(conn);
+                if (micConns.remove(conn) && micConns.isEmpty()) {
+                    MicListener l = parent.micListener;
+                    if (l != null) {
+                        try { l.onMicState(false); } catch (Exception ignored) {}
+                    }
+                    sendToTv("{\"type\":\"mic\",\"on\":false}");
+                }
             }
         }
 

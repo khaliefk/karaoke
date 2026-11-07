@@ -137,6 +137,8 @@ public class MainActivity extends Activity {
 
     private void startScan() {
         stopMicStream(); // scan ulang = sesi baru, mic lama harus mati
+        micStreamer = null; // v1.3.1: buang streamer lama supaya start
+        // berikutnya memakai kode pairing BARU dari QR yang di-scan
         Intent i = new Intent(this, ScannerActivity.class);
         startActivityForResult(i, REQ_SCAN);
     }
@@ -237,15 +239,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* v1.3.1: SELALU buat MicStreamer baru dengan tvIp/pairCode saat
+       ini. Streamer lama menyimpan kode pairing dari QR pertama;
+       setelah scan ulang (kode berotasi) kode itu sudah mati dan
+       mic tidak akan pernah bisa ON lagi sampai aplikasi di-restart
+       (bug v1.3.0). MicStreamer.start() sendiri sudah idempotent. */
     private void startMicStream() {
-        if (micStreamer == null) {
-            micStreamer = new MicStreamer(tvIp, pairCode, new MicStreamer.Listener() {
-                @Override
-                public void onMicState(final String state) {
-                    jsMicState(state);
-                }
-            });
-        }
+        stopMicStream();
+        micStreamer = new MicStreamer(tvIp, pairCode, new MicStreamer.Listener() {
+            @Override
+            public void onMicState(final String state) {
+                jsMicState(state);
+            }
+        });
         micStreamer.start();
     }
 

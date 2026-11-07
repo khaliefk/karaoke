@@ -9,10 +9,11 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Pemutar suara mic HP di TV (v1.3.0). Delay dijaga seminimal mungkin:
+ * Pemutar suara mic HP di TV (v1.3.1). Delay dijaga seminimal mungkin:
  * - AudioTrack PERFORMANCE_MODE_LOW_LATENCY (API 26+) + buffer kecil.
- * - Jitter buffer cuma 20ms (2 frame @10ms) sebelum playback dimulai,
- *   supaya tidak putus-putus tapi juga tidak menumpuk delay.
+ * - Prebuffer cuma 1 frame (10ms) sebelum playback dimulai (v1.3.0:
+ *   2 frame / 20ms) supaya suara keluar lebih cepat, dengan buffer
+ *   AudioTrack 20ms sebagai penyangga supaya tidak putus-putus.
  * - Kalau tidak ada frame selama ~200ms, track dimatikan (stream selesai).
  * Kalau mic tidak pernah dipakai, thread ini cuma menunggu antrean kosong
  * dan tidak pernah membuat AudioTrack - TV jalan normal seperti biasa.
@@ -26,7 +27,7 @@ public class MicPlayer implements KaraokeServer.MicListener {
     private volatile boolean destroyed;
     private final Thread playThread;
     private AudioTrack track; // hanya disentuh thread playback + stopTrack
-    private volatile float volume = 1.0f; // volume mic 0.0-1.0, default 100%
+    private volatile float volume = 0.5f; // volume mic 0.0-1.0, default 50% (v1.3.1)
 
     public MicPlayer() {
         playThread = new Thread(new Runnable() {
@@ -72,23 +73,18 @@ public class MicPlayer implements KaraokeServer.MicListener {
     private synchronized AudioTrack getTrack() { return track; }
 
     private void playLoop() {
-        byte[] pending = null;
         while (!destroyed) {
             try {
                 byte[] frame = queue.poll(200, TimeUnit.MILLISECONDS);
                 if (frame == null) {
-                    pending = null;
                     stopTrack();
                     continue;
                 }
                 if (getTrack() == null) {
-                    if (pending == null) {
-                        pending = frame; // tunggu 1 frame lagi (20ms prebuffer)
-                        continue;
-                    }
+                    /* v1.3.1: langsung putar di frame pertama (prebuffer
+                       10ms, dulu 20ms). Buffer AudioTrack 20ms yang
+                       menahan jitter, bukan prebuffer yang menumpuk. */
                     startTrack();
-                    if (getTrack() != null) writeFrame(pending);
-                    pending = null;
                 }
                 writeFrame(frame);
             } catch (InterruptedException e) {
@@ -103,7 +99,7 @@ public class MicPlayer implements KaraokeServer.MicListener {
             int minBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE,
                     AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minBuf <= 0) return;
-            int bufSize = Math.max(minBuf, FRAME_BYTES * 4);
+            int bufSize = Math.max(minBuf, FRAME_BYTES * 2); // 20ms (v1.3.0: 40ms)
             AudioTrack.Builder b = new AudioTrack.Builder()
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)

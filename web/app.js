@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.3.1';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -42,6 +42,12 @@
     };
     ws.onclose = function (ev) {
       wsOk = false;
+      /* v1.3.1: mic ikut mati saat koneksi putus, apapun penyebabnya.
+         Matikan stream native + reset UI, supaya toggle bisa di-ON-kan
+         lagi setelah sambung ulang (bug v1.3.0: mic nyangkut OFF
+         dengan pesan gagal setelah layanan putus). */
+      stopMicNative();
+      setMicUi(false, '');
       if (ev && ev.code === 4001) {
         authFailed = true;
         setConn(false, 'Kode pairing salah. Scan ulang QR di TV.');
@@ -329,7 +335,7 @@
      beneran di sisi TV. Status asli datang dari native lewat
      window.__micState (izin ditolak / gagal jalan ikut dilaporkan). */
   var micOn = false, micBusy = false, micTimer = null;
-  var micVol = 100; // volume mic 0-100%, default 100%
+  var micVol = 50; // volume mic 0-100%, default 50% (v1.3.1, dulu 100%)
 
   /* Kirim volume mic ke TV (server teruskan ke AudioTrack mic).
      Berlaku langsung saat mic ON; kalau mic OFF, nilainya disimpan
@@ -600,7 +606,7 @@
     var mv = $('micVolSlider');
     mv.addEventListener('input', function () {
       micVol = parseInt(this.value, 10);
-      if (isNaN(micVol)) micVol = 100;
+      if (isNaN(micVol)) micVol = 50;
       micVol = Math.max(0, Math.min(100, micVol));
       $('micVolVal').textContent = micVol;
       sendMicVolume();

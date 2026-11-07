@@ -21,7 +21,7 @@
     <div id="pairCode" class="wait-code">------</div>
     <div id="qrCountdown" class="wait-countdown">QR baru dalam 30 dtk</div>
     <div id="waitIp" class="wait-ip"></div>
-    <div class="wait-version" id="tvVersion">v1.3.0</div>
+    <div class="wait-version" id="tvVersion">v1.3.1</div>
     <div class="wait-actions">
       <button id="btnAboutWait" class="btn ghost-tv">About</button>
       <button id="btnExitWait" class="btn exit-btn">✕ Keluar</button>
@@ -51,15 +51,15 @@
   </header>
   <div id="connMsg" class="conn-msg">Menghubungkan ke TV…</div>
 
-  <!-- Mic HP (v1.3.0): ON = suara HP dikirim ke TV, keluar lewat
-       speaker TV. OFF = pakai mic wireless beneran di sisi TV.
-       Slider di samping tombol = volume mic (0-100%), berlaku langsung
-       saat mic ON. -->
+  <!-- Mic HP (v1.3.0, default volume 50% sejak v1.3.1): ON = suara HP
+       dikirim ke TV, keluar lewat speaker TV. OFF = pakai mic wireless
+       beneran di sisi TV. Slider di samping tombol = volume mic
+       (0-100%), berlaku langsung saat mic ON. -->
   <section class="mic-sec">
     <div class="mic-row">
       <button id="btnMic" class="btn mic">🎤 Mic HP: OFF</button>
-      <input id="micVolSlider" type="range" min="0" max="100" value="100" title="Volume mic">
-      <span id="micVolVal">100</span>
+      <input id="micVolSlider" type="range" min="0" max="100" value="50" title="Volume mic">
+      <span id="micVolVal">50</span>
     </div>
     <div id="micStatus" class="mic-status"></div>
   </section>
@@ -104,7 +104,7 @@
   <footer class="phone-footer">
     <button id="btnAboutPhone" class="btn ghost small">About</button>
     <button id="btnExitPhone" class="btn ghost small danger-outline">Keluar</button>
-    <span class="phone-version" id="phoneVersion">v1.3.0</span>
+    <span class="phone-version" id="phoneVersion">v1.3.1</span>
   </footer>
 </div>
 
