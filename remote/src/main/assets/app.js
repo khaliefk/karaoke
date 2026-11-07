@@ -323,6 +323,12 @@
         broadcast();
       }
     }, 1000);
+    /* v1.3.4: kabari native kalau halaman TV sudah jalan, supaya layar
+       tunggu native diganti WebView. Kalau WebView TV rusak/blank,
+       panggilan ini tidak pernah sampai dan layar native tetap tampil. */
+    if (window.Android && window.Android.onPageReady) {
+      try { window.Android.onPageReady(); } catch (e) {}
+    }
   }
 
   /* ================= MODE PHONE ================= */

@@ -7,6 +7,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,6 +18,10 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -22,33 +30,63 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
- * Activity TV: nyalakan service server, tunggu server siap, baru tampilkan
- * UI TV di WebView fullscreen.
+ * Activity TV: nyalakan service server, tampilkan layar tunggu NATIVE
+ * (QR + kode pairing digambar Android langsung, tanpa WebView), lalu
+ * muat UI TV di WebView di belakangnya dan beralih begitu halaman web
+ * melaporkan dirinya sudah jalan.
  *
- * Perbaikan 6 Nov 2026: dulu WebView langsung load URL begitu activity
- * dibuat, padahal service server baru mulai belakangan (startService itu
- * async). Hasilnya halaman gagal dimuat dengan ERR_CONNECTION_REFUSED.
- * Sekarang activity menunggu server menjawab dulu, dan kalau load gagal,
- * dicoba ulang otomatis.
+ * v1.3.4 (7 Nov 2026): layar tunggu native. Alasan: di beberapa TV
+ * (mis. Changhong Android 14) WebView sistem tidak me-render halaman
+ * sama sekali, layarnya putih polos dan QR tidak pernah muncul, padahal
+ * browser TV-nya bisa buka YouTube dengan normal. Dengan layar native,
+ * QR + kode selalu tampil walau WebView TV-nya rusak; pairing tetap
+ * jalan karena HP terhubung langsung ke server, bukan ke WebView.
+ * WebView cuma dipakai untuk player, dan cuma ditampilkan kalau halaman
+ * web memanggil Android.onPageReady() dari initTv().
+ *
+ * Perbaikan 6 Nov 2026 (dipertahankan): dulu WebView langsung load URL
+ * begitu activity dibuat, padahal service server baru mulai belakangan
+ * (startService itu async). Hasilnya halaman gagal dimuat dengan
+ * ERR_CONNECTION_REFUSED. Sekarang activity menunggu server menjawab
+ * dulu, dan kalau load gagal, dicoba ulang otomatis.
  */
 public class MainActivity extends Activity {
 
     private static final String TV_URL = "http://localhost:8080/?mode=tv";
-    private static final String HEALTH_URL = "http://127.0.0.1:8080/api/info";
-    private static final int MAX_WAIT_TRIES = 40;   // ~20 detik
-    private static final int WAIT_INTERVAL_MS = 500;
+    private static final String INFO_URL = "http://127.0.0.1:8080/api/info";
+    private static final String QR_URL = "http://127.0.0.1:8080/qr.png";
+    private static final int POLL_INTERVAL_MS = 1000;
+    private static final int FAIL_AFTER = 10;   // ~10 detik tanpa jawaban server
     private static final int MAX_RETRIES = 10;
 
     private WebView webView;
+    private View nativeView;
+    private ImageView qrImage;
+    private TextView codeText;
+    private TextView countdownText;
+    private TextView ipText;
+    private TextView statusText;
     private Handler mainHandler;
     private int retries;
     private volatile boolean destroyed;
+    private volatile boolean webLoaded;
+    private volatile boolean webReady;
+    private String lastCode = "";
+    private Bitmap lastQr;
     private long updateDownloadId = -1;
     private long installLaunchedId = -1;
     private BroadcastReceiver downloadReceiver;
@@ -65,6 +103,8 @@ public class MainActivity extends Activity {
         } else {
             startService(svc);
         }
+
+        FrameLayout root = new FrameLayout(this);
 
         webView = new WebView(this);
         WebSettings s = webView.getSettings();
@@ -91,7 +131,14 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        setContentView(webView);
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Layar tunggu native menutupi WebView sampai halaman web siap.
+        nativeView = buildNativeWaitView();
+        root.addView(nativeView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(root);
 
         // Download update selesai -> buka installer sistem.
         // v1.3.2: receiver ini cuma cadangan. Jalur utama adalah polling
@@ -126,77 +173,241 @@ public class MainActivity extends Activity {
             registerReceiver(downloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
         }
 
-        // Tampilkan layar tunggu, lalu muat halaman begitu server menjawab.
-        webView.loadData(WAIT_HTML, "text/html", "UTF-8");
-        waitForServerThenLoad();
+        // Poll /api/info tiap detik: isi layar tunggu native, dan muat
+        // halaman web begitu server menjawab.
+        startInfoPoller();
     }
 
-    private void waitForServerThenLoad() {
+    /** Layar tunggu native: judul, QR, kode pairing, hitung mundur, IP. */
+    private View buildNativeWaitView() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+        layout.setBackgroundColor(Color.parseColor("#0D0D0D"));
+        int pad = dp(24);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView title = new TextView(this);
+        title.setText("Karaoke for TV");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 36);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
+        layout.addView(title, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView sub = new TextView(this);
+        sub.setText("Scan QR dari HP untuk mulai");
+        sub.setTextColor(Color.parseColor("#AAAAAA"));
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        sub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subLp.topMargin = dp(8);
+        layout.addView(sub, subLp);
+
+        int qrSize = (int) (Math.min(
+                getResources().getDisplayMetrics().widthPixels,
+                getResources().getDisplayMetrics().heightPixels) * 0.42);
+        qrImage = new ImageView(this);
+        qrImage.setBackgroundColor(Color.WHITE);
+        int qrPad = dp(12);
+        qrImage.setPadding(qrPad, qrPad, qrPad, qrPad);
+        qrImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams qrLp = new LinearLayout.LayoutParams(qrSize, qrSize);
+        qrLp.topMargin = dp(24);
+        layout.addView(qrImage, qrLp);
+
+        codeText = new TextView(this);
+        codeText.setText(". . . . . .");
+        codeText.setTextColor(Color.WHITE);
+        codeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 48);
+        codeText.setTypeface(Typeface.MONOSPACE);
+        codeText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams codeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        codeLp.topMargin = dp(16);
+        layout.addView(codeText, codeLp);
+
+        countdownText = new TextView(this);
+        countdownText.setTextColor(Color.parseColor("#E8B64C"));
+        countdownText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        countdownText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams cdLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cdLp.topMargin = dp(8);
+        layout.addView(countdownText, cdLp);
+
+        ipText = new TextView(this);
+        ipText.setTextColor(Color.parseColor("#AAAAAA"));
+        ipText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        ipText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams ipLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ipLp.topMargin = dp(8);
+        layout.addView(ipText, ipLp);
+
+        TextView version = new TextView(this);
+        version.setText("v" + getAppVersionName());
+        version.setTextColor(Color.parseColor("#888888"));
+        version.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        version.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        vLp.topMargin = dp(16);
+        layout.addView(version, vLp);
+
+        statusText = new TextView(this);
+        statusText.setTextColor(Color.parseColor("#FF6B6B"));
+        statusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        statusText.setGravity(Gravity.CENTER);
+        statusText.setVisibility(View.GONE);
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        stLp.topMargin = dp(16);
+        layout.addView(statusText, stLp);
+
+        return layout;
+    }
+
+    private int dp(int v) {
+        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+                getResources().getDisplayMetrics());
+    }
+
+    /** Poll /api/info tiap detik sampai activity mati. */
+    private void startInfoPoller() {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                for (int i = 0; i < MAX_WAIT_TRIES; i++) {
-                    if (destroyed) {
-                        return;
-                    }
-                    if (serverUp()) {
-                        mainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (!destroyed) {
-                                    retries = 0;
-                                    webView.loadUrl(TV_URL);
+                int fails = 0;
+                while (!destroyed) {
+                    String body = httpGet(INFO_URL);
+                    if (body != null) {
+                        fails = 0;
+                        try {
+                            JSONObject info = new JSONObject(body);
+                            final String code = info.optString("code", "");
+                            final String ip = info.optString("ip", "");
+                            final boolean connected = info.optBoolean("phoneConnected", false);
+                            final int expires = info.optInt("codeExpiresIn", -1);
+                            final boolean codeChanged = !code.equals(lastCode);
+                            if (codeChanged) lastCode = code;
+                            final Bitmap qr = codeChanged ? httpGetBitmap(QR_URL) : null;
+                            mainHandler.post(new Runnable() {
+                                @Override public void run() {
+                                    if (!destroyed) applyInfo(code, ip, connected, expires, qr);
                                 }
+                            });
+                            if (!webLoaded) {
+                                webLoaded = true;
+                                mainHandler.post(new Runnable() {
+                                    @Override public void run() {
+                                        if (!destroyed) {
+                                            retries = 0;
+                                            webView.loadUrl(TV_URL);
+                                        }
+                                    }
+                                });
                             }
-                        });
-                        return;
+                        } catch (Exception e) {
+                            // JSON rusak: lewati putaran ini
+                        }
+                    } else {
+                        fails++;
+                        if (fails >= FAIL_AFTER) {
+                            mainHandler.post(new Runnable() {
+                                @Override public void run() {
+                                    if (!destroyed && statusText != null) {
+                                        statusText.setVisibility(View.VISIBLE);
+                                        statusText.setText("Server tidak bisa jalan. Tutup aplikasi ini lalu buka lagi.");
+                                    }
+                                }
+                            });
+                        }
                     }
                     try {
-                        Thread.sleep(WAIT_INTERVAL_MS);
+                        Thread.sleep(POLL_INTERVAL_MS);
                     } catch (InterruptedException e) {
                         return;
                     }
                 }
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!destroyed) {
-                            webView.loadData(FAIL_HTML, "text/html", "UTF-8");
-                        }
-                    }
-                });
             }
         }).start();
     }
 
-    private static boolean serverUp() {
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(HEALTH_URL).openConnection();
-            c.setConnectTimeout(400);
-            c.setReadTimeout(400);
-            c.setRequestMethod("GET");
-            return c.getResponseCode() == 200;
-        } catch (IOException e) {
-            return false;
-        } finally {
-            if (c != null) {
-                c.disconnect();
+    /** Terapkan hasil /api/info ke layar tunggu native (jalan di UI thread). */
+    private void applyInfo(String code, String ip, boolean connected, int expires, Bitmap qr) {
+        if (statusText != null) statusText.setVisibility(View.GONE);
+        if (codeText != null && code.length() > 0) {
+            // Spasi antar digit, sama seperti halaman web.
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < code.length(); i++) {
+                if (i > 0) sb.append(' ');
+                sb.append(code.charAt(i));
             }
+            codeText.setText(sb.toString());
+        }
+        if (qr != null && qrImage != null) {
+            qrImage.setImageBitmap(qr);
+            if (lastQr != null && lastQr != qr) {
+                try { lastQr.recycle(); } catch (Exception e) {}
+            }
+            lastQr = qr;
+        }
+        if (ipText != null && ip.length() > 0) {
+            ipText.setText("TV: " + ip + " - port 8080");
+        }
+        if (countdownText != null) {
+            if (connected) countdownText.setText("HP terhubung - QR dijeda");
+            else if (expires >= 0) countdownText.setText("QR baru dalam " + expires + " dtk");
+            else countdownText.setText("");
         }
     }
 
-    private static final String WAIT_HTML =
-            "<html><body style='background:#0d0d0d;color:#eee;font-family:sans-serif;"
-            + "text-align:center;padding-top:20%'>"
-            + "<h1>Karaoke for TV</h1><p>Menyalakan server...</p></body></html>";
+    /** Sembunyikan layar native, tampilkan WebView (sekali saja). */
+    private void showWebView() {
+        if (webReady || destroyed) return;
+        webReady = true;
+        if (nativeView != null) nativeView.setVisibility(View.GONE);
+    }
 
-    private static final String FAIL_HTML =
-            "<html><body style='background:#0d0d0d;color:#eee;font-family:sans-serif;"
-            + "text-align:center;padding-top:20%'>"
-            + "<h1>Karaoke for TV</h1>"
-            + "<p>Server tidak bisa jalan. Tutup aplikasi ini lalu buka lagi.</p>"
-            + "</body></html>";
+    private static String httpGet(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(800);
+            c.setReadTimeout(800);
+            c.setRequestMethod("GET");
+            if (c.getResponseCode() != 200) return null;
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private static Bitmap httpGetBitmap(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(1500);
+            c.setReadTimeout(1500);
+            c.setRequestMethod("GET");
+            if (c.getResponseCode() != 200) return null;
+            return BitmapFactory.decodeStream(c.getInputStream());
+        } catch (IOException e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
 
     /** Keluar bersih: matikan service server lalu tutup activity. */
     private void exitApp() {
@@ -211,6 +422,19 @@ public class MainActivity extends Activity {
             mainHandler.post(new Runnable() {
                 @Override public void run() {
                     if (!destroyed) MainActivity.this.exitApp();
+                }
+            });
+        }
+
+        /** Halaman TV memanggil ini begitu initTv() selesai: halaman jalan,
+            layar tunggu native boleh disembunyikan. Kalau WebView TV rusak
+            dan halaman tidak pernah jalan, panggilan ini tidak pernah
+            sampai dan layar native tetap tampil. */
+        @JavascriptInterface
+        public void onPageReady() {
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!destroyed) showWebView();
                 }
             });
         }
@@ -417,6 +641,10 @@ public class MainActivity extends Activity {
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception e) {}
             downloadReceiver = null;
+        }
+        if (lastQr != null) {
+            try { lastQr.recycle(); } catch (Exception e) {}
+            lastQr = null;
         }
         if (webView != null) {
             webView.destroy();
