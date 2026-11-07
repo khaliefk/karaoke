@@ -1,7 +1,7 @@
 {
-  "code": 10,
-  "notes": "v1.3.5: scanner Remote tidak FC lagi + bisa masukkan kode manual. v1.3.4: layar tunggu TV tampil tanpa WebView.",
+  "code": 11,
+  "notes": "v1.3.6: scanner Remote anti-FC total (semua jalur kamera diamankan, gagal buka kamera tidak crash lagi) + jejak crash ditampilkan kalau masih bermasalah. v1.3.5: entri kode manual. v1.3.4: layar tunggu TV tanpa WebView.",
   "remote": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk",
   "tv": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk",
-  "version": "1.3.5"
+  "version": "1.3.6"
 }

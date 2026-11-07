@@ -2,9 +2,11 @@ package com.khalief.karaoke.remote;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
@@ -24,8 +26,12 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 /**
  * Activity HP: scan QR di TV, lalu tampilkan remote karaoke di WebView.
@@ -55,6 +61,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        installCrashHandler();
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
@@ -130,7 +137,70 @@ public class MainActivity extends Activity {
             }
         });
 
-        ensureCameraThenScan();
+        // v1.3.6: kalau peluncuran sebelumnya crash, tampilkan jejaknya
+        // dulu (bisa di-screenshot) dan JANGAN langsung buka scanner,
+        // supaya dialognya tidak ketutup scanner. Scanner dibuka setelah
+        // user menutup dialog. Kalau tidak ada crash, langsung scan.
+        final String lastCrash = getSharedPreferences("karaoke", MODE_PRIVATE)
+                .getString("last_crash", null);
+        if (lastCrash != null) {
+            getSharedPreferences("karaoke", MODE_PRIVATE).edit()
+                    .remove("last_crash").commit();
+            showCrashDialog(lastCrash);
+        } else {
+            ensureCameraThenScan();
+        }
+    }
+
+    /** v1.3.6: tangkap crash tak terduga, simpan jejak stack trace-nya
+        supaya di peluncuran berikutnya bisa ditampilkan dan di-screenshot
+        (bukan hilang tanpa kabar). Dipasang sekali per proses. */
+    private static boolean crashHandlerInstalled = false;
+
+    private void installCrashHandler() {
+        if (crashHandlerInstalled) return;
+        crashHandlerInstalled = true;
+        final Context appCtx = getApplicationContext();
+        final Thread.UncaughtExceptionHandler def =
+                Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(
+                new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread t, Throwable e) {
+                try {
+                    StringWriter sw = new StringWriter();
+                    e.printStackTrace(new PrintWriter(sw));
+                    String trace = sw.toString();
+                    if (trace.length() > 1500) trace = trace.substring(0, 1500);
+                    appCtx.getSharedPreferences("karaoke", MODE_PRIVATE).edit()
+                            .putString("last_crash", trace).commit();
+                } catch (Exception ignored) {}
+                if (def != null) def.uncaughtException(t, e);
+            }
+        });
+    }
+
+    /** v1.3.6: tampilkan jejak crash terakhir dalam dialog yang bisa
+        di-screenshot, untuk melacak kenapa aplikasi FC di HP tertentu. */
+    private void showCrashDialog(String trace) {
+        TextView tv = new TextView(this);
+        tv.setText(trace);
+        tv.setTextSize(11);
+        tv.setPadding(24, 16, 24, 16);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("Aplikasi sempat berhenti")
+                .setMessage("Screenshot layar ini dan kirim ke pengembang "
+                        + "supaya bisa diperbaiki:")
+                .setView(sv)
+                .setPositiveButton("Tutup", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        ensureCameraThenScan();
+                    }
+                })
+                .show();
     }
 
     private void ensureCameraThenScan() {

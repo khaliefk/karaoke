@@ -193,7 +193,15 @@ public class ScannerActivity extends Activity {
             imageReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
                 @Override
                 public void onImageAvailable(ImageReader reader) {
-                    Image img = reader.acquireLatestImage();
+                    Image img;
+                    try {
+                        img = reader.acquireLatestImage();
+                    } catch (Exception ignored) {
+                        // v1.3.6: reader sudah ditutup saat callback ini
+                        // masih antre (balapan saat scanner ditutup).
+                        // Abaikan saja, jangan sampai FC.
+                        return;
+                    }
                     if (img == null) return;
                     try {
                         frameCount++;
@@ -239,7 +247,11 @@ public class ScannerActivity extends Activity {
                     scheduleCameraRetry();
                 }
             }, bgHandler);
-        } catch (CameraAccessException e) {
+        } catch (Exception e) {
+            // v1.3.6: selain CameraAccessException, openCamera bisa
+            // melempar SecurityException (izin dicabut) dan
+            // IllegalArgumentException (id kamera tidak valid).
+            // Jangan FC: coba lagi, lalu arahkan ke entri manual.
             scheduleCameraRetry();
         }
     }
@@ -307,7 +319,12 @@ public class ScannerActivity extends Activity {
                             session = s;
                             try {
                                 s.setRepeatingRequest(req, null, bgHandler);
-                            } catch (CameraAccessException ignored) {}
+                            } catch (Exception ignored) {
+                                // v1.3.6: permintaan gagal, tutup kamera
+                                // lalu coba lagi, jangan FC.
+                                closeCamera();
+                                scheduleCameraRetry();
+                            }
                         }
 
                         @Override
@@ -316,7 +333,14 @@ public class ScannerActivity extends Activity {
                             scheduleCameraRetry();
                         }
                     }, bgHandler);
-        } catch (CameraAccessException ignored) {}
+        } catch (Exception ignored) {
+            // v1.3.6: createCaptureSession bisa melempar
+            // IllegalArgumentException (surface tidak valid) atau
+            // IllegalStateException (kamera tertutup). Tutup kamera
+            // lalu coba lagi, jangan FC.
+            closeCamera();
+            scheduleCameraRetry();
+        }
     }
 
     private void closeCamera() {
