@@ -23,7 +23,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:gravity="center"
-            android:text="Buka aplikasi Karaoke for TV di TV, lalu scan QR-nya dari sini."
+            android:text="Pilih cara sambung ke TV: scan QR-nya, atau masukkan kode 6 digit yang tampil di layar TV."
             android:textColor="#FFFFFF"
             android:textSize="17sp" />
 

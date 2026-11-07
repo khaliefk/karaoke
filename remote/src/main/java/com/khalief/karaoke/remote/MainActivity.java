@@ -137,10 +137,12 @@ public class MainActivity extends Activity {
             }
         });
 
-        // v1.3.6: kalau peluncuran sebelumnya crash, tampilkan jejaknya
-        // dulu (bisa di-screenshot) dan JANGAN langsung buka scanner,
-        // supaya dialognya tidak ketutup scanner. Scanner dibuka setelah
-        // user menutup dialog. Kalau tidak ada crash, langsung scan.
+        // v1.3.7: JANGAN langsung buka kamera saat aplikasi dibuka.
+        // Tampilkan layar pilihan: scan QR atau masukkan kode manual
+        // (kode tampil di layar TV). User yang memilih.
+        // Kalau peluncuran sebelumnya crash, tampilkan jejaknya dulu
+        // (bisa di-screenshot); layar pilihan muncul setelah dialog
+        // ditutup.
         final String lastCrash = getSharedPreferences("karaoke", MODE_PRIVATE)
                 .getString("last_crash", null);
         if (lastCrash != null) {
@@ -148,7 +150,7 @@ public class MainActivity extends Activity {
                     .remove("last_crash").commit();
             showCrashDialog(lastCrash);
         } else {
-            ensureCameraThenScan();
+            showScanView(null);
         }
     }
 
@@ -197,25 +199,29 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Tutup", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface d, int which) {
-                        ensureCameraThenScan();
+                        // v1.3.7: kembali ke layar pilihan, jangan
+                        // langsung buka kamera.
+                        showScanView(null);
                     }
                 })
                 .show();
     }
 
-    private void ensureCameraThenScan() {
+    /** v1.3.7: tombol "Scan QR TV". Minta izin kamera dulu kalau belum
+        ada; kalau sudah ada, langsung buka scanner. */
+    private void startScan() {
+        stopMicStream(); // scan ulang = sesi baru, mic lama harus mati
+        micStreamer = null; // v1.3.1: buang streamer lama supaya start
+        // berikutnya memakai kode pairing BARU dari QR yang di-scan
         if (checkSelfPermission(Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
-            startScan();
+            launchScanner();
         } else {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
         }
     }
 
-    private void startScan() {
-        stopMicStream(); // scan ulang = sesi baru, mic lama harus mati
-        micStreamer = null; // v1.3.1: buang streamer lama supaya start
-        // berikutnya memakai kode pairing BARU dari QR yang di-scan
+    private void launchScanner() {
         Intent i = new Intent(this, ScannerActivity.class);
         startActivityForResult(i, REQ_SCAN);
     }
@@ -273,9 +279,10 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_CAMERA) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startScan();
+                launchScanner();
             } else {
-                Toast.makeText(this, "Izin kamera dibutuhkan untuk scan QR",
+                Toast.makeText(this, "Izin kamera dibutuhkan untuk scan QR. "
+                        + "Bisa pakai kode manual di bawah.",
                         Toast.LENGTH_LONG).show();
             }
         } else if (requestCode == REQ_MIC) {
