@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_view"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#111111">
@@ -40,6 +41,7 @@
              dipakai (FC / pratinjau hitam), user tetap bisa pairing
              dengan mengetik IP + kode 6 digit yang tampil di layar TV. -->
         <TextView
+            android:id="@+id/manual_label"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="32dp"
@@ -75,6 +77,17 @@
             android:layout_marginTop="16dp"
             android:backgroundTint="#16A34A"
             android:text="Sambungkan"
+            android:textColor="#FFFFFF" />
+
+        <!-- v1.3.8: tema tampilan (Sistem/Gelap/Terang). Pilihan
+             tersimpan, dipakai layar ini dan halaman web Remote. -->
+        <Button
+            android:id="@+id/theme_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:backgroundTint="#262626"
+            android:text="🎨 Tema: Sistem"
             android:textColor="#FFFFFF" />
     </LinearLayout>
 

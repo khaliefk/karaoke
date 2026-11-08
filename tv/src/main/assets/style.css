@@ -119,3 +119,48 @@ button { cursor: pointer; }
 .queue-item .result-title { font-size: 13px; }
 .queue-remove { font-size: 18px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: #3a3a3a; color: #fff; flex-shrink: 0; }
 .queue-empty { font-size: 13px; color: #777; padding: 6px 2px; }
+
+/* ---------- Tema terang, mode HP saja (v1.3.8) ----------
+   Cuma aktif kalau body mode-phone + class theme-light (diatur JS
+   dari pilihan Sistem/Gelap/Terang). TV selalu gelap, tidak kena. */
+.theme-opt { text-align: left; }
+.theme-opt .theme-check { float: right; color: #22c55e; font-weight: 800; }
+.theme-opt.active { outline: 2px solid #16a34a; }
+body.mode-phone.theme-light { background: #f4f4f5; color: #171717; }
+body.mode-phone.theme-light #phoneView { background: #f4f4f5; }
+body.mode-phone.theme-light .btn { background: #e4e4e7; color: #171717; }
+body.mode-phone.theme-light .btn.primary { background: #16a34a; color: #fff; }
+body.mode-phone.theme-light .btn.danger { background: #b91c1c; color: #fff; }
+body.mode-phone.theme-light .btn.danger-outline { background: transparent; border: 1px solid #b91c1c; color: #b91c1c; }
+body.mode-phone.theme-light .btn.ghost { background: transparent; border: 1px solid #a1a1aa; color: #171717; }
+body.mode-phone.theme-light .btn.ctrl { background: #e4e4e7; color: #171717; }
+body.mode-phone.theme-light .btn.ctrl.big { background: #16a34a; color: #fff; }
+body.mode-phone.theme-light .btn.mic { background: #e4e4e7; color: #171717; }
+body.mode-phone.theme-light .btn.mic.on { background: #b91c1c; color: #fff; }
+body.mode-phone.theme-light .search-box input { background: #fff; border: 1px solid #d4d4d8; color: #171717; }
+body.mode-phone.theme-light .search-box input::placeholder { color: #a1a1aa; }
+body.mode-phone.theme-light .result-item,
+body.mode-phone.theme-light .queue-item,
+body.mode-phone.theme-light .np-card { background: #fff; border: 1px solid #e4e4e7; }
+body.mode-phone.theme-light .result-meta,
+body.mode-phone.theme-light .conn-msg,
+body.mode-phone.theme-light .search-status,
+body.mode-phone.theme-light .np-label,
+body.mode-phone.theme-light .np-time,
+body.mode-phone.theme-light .np-hint,
+body.mode-phone.theme-light .mic-status,
+body.mode-phone.theme-light .queue-empty { color: #71717a; }
+body.mode-phone.theme-light .np-progress { background: #d4d4d8; }
+body.mode-phone.theme-light .mic-exp { color: #b45309; border: 1px solid #d97706; }
+body.mode-phone.theme-light #micVolVal,
+body.mode-phone.theme-light #volVal { color: #52525b; }
+body.mode-phone.theme-light .queue-remove { background: #e4e4e7; color: #171717; }
+body.mode-phone.theme-light .phone-footer { border-top: 1px solid #e4e4e7; }
+body.mode-phone.theme-light .phone-version { color: #a1a1aa; }
+body.mode-phone.theme-light .about-card { background: #fff; border: 1px solid #e4e4e7; }
+body.mode-phone.theme-light .about-version { color: #a1a1aa; }
+body.mode-phone.theme-light .about-desc { color: #52525b; }
+body.mode-phone.theme-light .about-list li { color: #3f3f46; }
+body.mode-phone.theme-light .update-status,
+body.mode-phone.theme-light .update-progress-text { color: #71717a; }
+body.mode-phone.theme-light .update-progress-track { background: #e4e4e7; }

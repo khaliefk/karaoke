@@ -10,6 +10,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -84,6 +85,15 @@ public class MainActivity extends Activity {
             public void onClick(View v) {
                 connectManual(manualIp.getText().toString().trim(),
                         manualCode.getText().toString().trim());
+            }
+        });
+
+        // v1.3.8: tema tampilan (Sistem/Gelap/Terang).
+        Button themeBtn = findViewById(R.id.theme_btn);
+        themeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showThemeDialog();
             }
         });
 
@@ -264,8 +274,65 @@ public class MainActivity extends Activity {
 
     private void showScanView(String message) {
         if (message != null) scanText.setText(message);
+        applyScanTheme(); // v1.3.8: tema bisa berubah dari halaman web
         webView.setVisibility(View.GONE);
         scanView.setVisibility(View.VISIBLE);
+    }
+
+    /** v1.3.8: terapkan tema (Sistem/Gelap/Terang) ke layar pilihan.
+        Dipanggil tiap kali layar pilihan tampil, supaya pilihan yang
+        diubah dari halaman web langsung kebaca di sini. */
+    private void applyScanTheme() {
+        boolean dark = ThemeHelper.isDark(this);
+        View root = findViewById(R.id.root_view);
+        if (root != null) root.setBackgroundColor(ThemeHelper.bg(dark));
+        if (scanText != null) scanText.setTextColor(ThemeHelper.text(dark));
+        TextView label = findViewById(R.id.manual_label);
+        if (label != null) label.setTextColor(ThemeHelper.muted(dark));
+        EditText ip = findViewById(R.id.manual_ip);
+        if (ip != null) {
+            ip.setTextColor(ThemeHelper.text(dark));
+            ip.setHintTextColor(ThemeHelper.hint(dark));
+        }
+        EditText code = findViewById(R.id.manual_code);
+        if (code != null) {
+            code.setTextColor(ThemeHelper.text(dark));
+            code.setHintTextColor(ThemeHelper.hint(dark));
+        }
+        updateThemeButton();
+    }
+
+    private void updateThemeButton() {
+        Button b = findViewById(R.id.theme_btn);
+        if (b == null) return;
+        boolean dark = ThemeHelper.isDark(this);
+        b.setText("\uD83C\uDFA8 Tema: " + ThemeHelper.label(ThemeHelper.getTheme(this)));
+        b.setBackgroundTintList(ColorStateList.valueOf(ThemeHelper.ghostBtn(dark)));
+        b.setTextColor(ThemeHelper.ghostBtnText(dark));
+    }
+
+    /** v1.3.8: dialog pilih tema. Pilih langsung tersimpan + diterapkan. */
+    private void showThemeDialog() {
+        final String[] modes = {ThemeHelper.SYSTEM, ThemeHelper.DARK, ThemeHelper.LIGHT};
+        String[] labels = {"Sistem (ikut HP)", "Gelap", "Terang"};
+        String cur = ThemeHelper.getTheme(this);
+        int checked = 0;
+        for (int i = 0; i < modes.length; i++) {
+            if (modes[i].equals(cur)) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Tema tampilan")
+                .setSingleChoiceItems(labels, checked,
+                        new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        ThemeHelper.setTheme(MainActivity.this, modes[which]);
+                        d.dismiss();
+                        applyScanTheme();
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
     }
 
     private void showWebView() {
@@ -445,6 +512,26 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getVersionName() {
             return getAppVersionName();
+        }
+
+        /** v1.3.8: tema tampilan (system/dark/light) untuk halaman web,
+            dibaca dari SharedPreferences supaya sama dengan layar
+            pilihan native. */
+        @JavascriptInterface
+        public String getTheme() {
+            return ThemeHelper.getTheme(MainActivity.this);
+        }
+
+        /** v1.3.8: simpan pilihan tema dari halaman web. Layar pilihan
+            native membacanya lagi tiap kali tampil. */
+        @JavascriptInterface
+        public void setTheme(final String mode) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    ThemeHelper.setTheme(MainActivity.this, mode);
+                }
+            });
         }
 
         /** Boleh install dari sumber tak dikenal? (Android 8+: toggle di Pengaturan) */

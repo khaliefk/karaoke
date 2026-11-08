@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.3.2';
+  var APP_VERSION = '1.3.8';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -18,6 +18,99 @@
     sec = Math.max(0, Math.floor(sec || 0));
     var m = Math.floor(sec / 60), s = sec % 60;
     return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  /* ---------- Tema tampilan Remote (v1.3.8, mode HP saja) ----------
+     Pilihan: system (ikut HP) / dark / light. Disimpan di aplikasi
+     native lewat bridge Android (SharedPreferences) supaya layar
+     pilihan native ikut ganti; kalau bridge tidak ada (dibuka di
+     browser biasa), pakai localStorage. */
+  var THEME_KEY = 'karaoke-theme';
+  var themeMode = 'system'; // pilihan user: system | dark | light
+  var themeMedia = null;    // matchMedia gelap/terang sistem
+
+  function themeBridgeGet() {
+    try {
+      if (window.Android && window.Android.getTheme) {
+        var t = window.Android.getTheme();
+        if (t === 'dark' || t === 'light' || t === 'system') return t;
+      }
+    } catch (e) {}
+    return null;
+  }
+  function themeBridgeSet(mode) {
+    try {
+      if (window.Android && window.Android.setTheme) window.Android.setTheme(mode);
+    } catch (e) {}
+  }
+  function themeStoredGet() {
+    var b = themeBridgeGet();
+    if (b) return b;
+    try {
+      var s = localStorage.getItem(THEME_KEY);
+      if (s === 'dark' || s === 'light' || s === 'system') return s;
+    } catch (e) {}
+    return 'system';
+  }
+  function themeStoredSet(mode) {
+    themeBridgeSet(mode);
+    try { localStorage.setItem(THEME_KEY, mode); } catch (e) {}
+  }
+  function themeIsDark() {
+    if (themeMode === 'dark') return true;
+    if (themeMode === 'light') return false;
+    try {
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch (e) { return true; }
+  }
+  function applyTheme() {
+    if (MODE !== 'phone') return;
+    document.body.classList.toggle('theme-light', !themeIsDark());
+    var label = themeMode === 'system' ? 'Sistem' : themeMode === 'dark' ? 'Gelap' : 'Terang';
+    var b = $('btnTheme');
+    if (b) b.textContent = '🎨 ' + label;
+    var opts = document.querySelectorAll('.theme-opt');
+    for (var i = 0; i < opts.length; i++) {
+      var o = opts[i];
+      var on = o.getAttribute('data-theme-opt') === themeMode;
+      o.classList.toggle('active', on);
+      var c = o.querySelector('.theme-check');
+      if (c) c.textContent = on ? ' ✓' : '';
+    }
+  }
+  function setTheme(mode) {
+    if (mode !== 'dark' && mode !== 'light' && mode !== 'system') return;
+    themeMode = mode;
+    themeStoredSet(mode);
+    applyTheme();
+  }
+  function initTheme() {
+    if (MODE !== 'phone') return;
+    themeMode = themeStoredGet();
+    applyTheme();
+    try {
+      if (window.matchMedia) {
+        themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+        var onChange = function () { if (themeMode === 'system') applyTheme(); };
+        if (themeMedia.addEventListener) themeMedia.addEventListener('change', onChange);
+        else if (themeMedia.addListener) themeMedia.addListener(onChange);
+      }
+    } catch (e) {}
+    var tb = $('btnTheme');
+    if (tb) tb.onclick = function () { $('themeModal').classList.remove('hidden'); };
+    var tc = $('btnThemeClose');
+    if (tc) tc.onclick = function () { $('themeModal').classList.add('hidden'); };
+    var opts = document.querySelectorAll('.theme-opt');
+    for (var i = 0; i < opts.length; i++) {
+      (function (el) {
+        el.onclick = function () {
+          setTheme(el.getAttribute('data-theme-opt'));
+          $('themeModal').classList.add('hidden');
+        };
+      })(opts[i]);
+    }
+    var tm = $('themeModal');
+    if (tm) tm.addEventListener('click', function (e) { if (e.target === tm) tm.classList.add('hidden'); });
   }
 
   /* ---------- WebSocket ---------- */
@@ -604,6 +697,7 @@
 
   function initPhone() {
     $('phoneView').classList.remove('hidden');
+    initTheme(); // tema Sistem/Gelap/Terang (v1.3.8)
     setConn(false, 'Menghubungkan ke TV…');
     $('btnDisconnect').onclick = disconnectTv;
     $('btnMic').onclick = toggleMic; // tombol mic HP (v1.3.0)
