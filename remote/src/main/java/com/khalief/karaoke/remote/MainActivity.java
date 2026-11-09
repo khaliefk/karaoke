@@ -31,8 +31,14 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+import org.json.JSONObject;
 
 /**
  * Activity HP: scan QR di TV, lalu tampilkan remote karaoke di WebView.
@@ -56,6 +62,10 @@ public class MainActivity extends Activity {
        dipakai MicStreamer untuk sambung WebSocket sendiri ke TV. */
     private String tvIp;
     private String pairCode;
+    /* v1.3.9: port aktual TV. Server TV bisa pindah port kalau 8080/8081
+       kepakai; QR membawa port HTTP-nya, /api/info membawa port WS-nya. */
+    private int tvHttpPort = 8080;
+    private int tvWsPort = 8081;
     private boolean pendingMic;
     private MicStreamer micStreamer;
 
@@ -239,7 +249,11 @@ public class MainActivity extends Activity {
     /** v1.3.5: sambung tanpa kamera. IP + kode dibaca user dari layar TV
         (layar tunggu native v1.3.4 menampilkannya), URL yang dibangun
         sama persis dengan isi QR. */
-    private void connectManual(String ip, String code) {
+    /* v1.3.9: server TV bisa pindah port HTTP kalau 8080 kepakai. Coba tiap
+       port kandidat sampai satu menjawab /api/info, lalu muat URL itu. */
+    private static final int[] HTTP_PORTS = {8080, 8082, 18080, 8888};
+
+    private void connectManual(final String ip, final String code) {
         if (!isValidIp(ip) || code == null || !code.matches("[0-9]{6}")) {
             Toast.makeText(this, "IP atau kode tidak valid. IP dan kode ada di layar TV.",
                     Toast.LENGTH_LONG).show();
@@ -250,7 +264,64 @@ public class MainActivity extends Activity {
         tvIp = ip;
         pairCode = code;
         showWebView();
-        webView.loadUrl("http://" + ip + ":8080/?mode=phone&code=" + code);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                int foundPort = -1;
+                int foundWs = -1;
+                for (int p : HTTP_PORTS) {
+                    int ws = probeInfoPort(ip, p);
+                    if (ws > 0) { foundPort = p; foundWs = ws; break; }
+                }
+                final int port = foundPort > 0 ? foundPort : 8080;
+                final int wsPort = foundWs > 0 ? foundWs : 8081;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        tvHttpPort = port;
+                        tvWsPort = wsPort;
+                        webView.loadUrl("http://" + ip + ":" + port + "/?mode=phone&code=" + code);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Tanya /api/info di satu port. Mengembalikan wsPort kalau server
+        menjawab, -1 kalau tidak. */
+    private static int probeInfoPort(String ip, int port) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL("http://" + ip + ":" + port + "/api/info").openConnection();
+            c.setConnectTimeout(800);
+            c.setReadTimeout(800);
+            c.setRequestMethod("GET");
+            if (c.getResponseCode() != 200) return -1;
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            JSONObject info = new JSONObject(new String(out.toByteArray(), "UTF-8"));
+            int ws = info.optInt("wsPort", -1);
+            return ws > 0 ? ws : -1;
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /* v1.3.9: sesudah scan QR, tanya /api/info supaya MicStreamer tahu
+       port WS aktual (server TV bisa pindah port). */
+    private void fetchWsPort() {
+        final String ip = tvIp;
+        final int port = tvHttpPort;
+        if (ip == null) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                int ws = probeInfoPort(ip, port);
+                if (ws > 0) tvWsPort = ws;
+            }
+        }).start();
     }
 
     private static boolean isValidIp(String ip) {
@@ -373,6 +444,9 @@ public class MainActivity extends Activity {
                     Uri u = Uri.parse(url);
                     tvIp = u.getHost();
                     pairCode = u.getQueryParameter("code");
+                    int p = u.getPort();
+                    tvHttpPort = p > 0 ? p : 8080;
+                    fetchWsPort();
                 } catch (Exception ignored) {}
                 showWebView();
                 webView.loadUrl(url);
@@ -441,7 +515,7 @@ public class MainActivity extends Activity {
        (bug v1.3.0). MicStreamer.start() sendiri sudah idempotent. */
     private void startMicStream() {
         stopMicStream();
-        micStreamer = new MicStreamer(tvIp, pairCode, new MicStreamer.Listener() {
+        micStreamer = new MicStreamer(tvIp, tvWsPort, pairCode, new MicStreamer.Listener() {
             @Override
             public void onMicState(final String state) {
                 jsMicState(state);

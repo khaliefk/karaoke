@@ -20,7 +20,13 @@ public class KaraokeService extends Service {
     private static final String CHANNEL_ID = "karaoke_tv";
     private static final int NOTIF_ID = 1;
 
-    private KaraokeServer server;
+    /** v1.3.9: port HTTP aktual yang dipakai server (bisa pindah kalau 8080
+        kepakai) dan alasan terakhir kalau server gagal jalan. Dibaca layar
+        TV (MainActivity) supaya URL polling dan pesan error selalu benar. */
+    public static volatile int httpPort = -1;
+    public static volatile String lastError = null;
+
+    private volatile KaraokeServer server;
     private MicPlayer micPlayer;
     private String code;
     private String ip;
@@ -56,17 +62,53 @@ public class KaraokeService extends Service {
             }
         };
 
-        server = new KaraokeServer(ip, code, assets, qr);
+        server = null;
         /* Mic HP (v1.3.0): suara mentah dari HP diputar via AudioTrack
            low-latency. Kalau mic tidak pernah dipakai, MicPlayer cuma
            menunggu dan tidak membuat AudioTrack. */
         micPlayer = new MicPlayer();
-        server.setMicListener(micPlayer);
-        try {
-            server.start();
-        } catch (Exception e) {
-            stopSelf();
+        startServerWithRetry(assets, qr);
+    }
+
+    /** v1.3.9: coba nyalakan server sampai 3x (jeda 2 detik). Dulu sekali
+        gagal langsung stopSelf diam-diam, layar TV stuck di QR kosong.
+        Kalau tetap gagal, simpan alasannya supaya layar TV bisa
+        menampilkan pesan yang jelas, lalu matikan service. */
+    private void startServerWithRetry(final KaraokeServer.AssetProvider assets,
+                                      final KaraokeServer.QrProvider qr) {
+        httpPort = -1;
+        lastError = null;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                for (int attempt = 1; attempt <= 3; attempt++) {
+                    KaraokeServer s = new KaraokeServer(ip, code, assets, qr);
+                    s.setMicListener(micPlayer);
+                    server = s;
+                    try {
+                        httpPort = s.start();
+                        lastError = null;
+                        return;
+                    } catch (Exception e) {
+                        lastError = shortReason(e);
+                        try { s.stop(); } catch (Exception ignored) {}
+                        if (attempt < 3) {
+                            try { Thread.sleep(2000); } catch (InterruptedException ie) { return; }
+                        }
+                    }
+                }
+                stopSelf();
+            }
+        }).start();
+    }
+
+    private static String shortReason(Exception e) {
+        String m = e.getMessage();
+        if (m == null || m.length() == 0) m = e.toString();
+        if (m.indexOf("EADDRINUSE") >= 0 || m.indexOf("Address already in use") >= 0) {
+            return "port dipakai aplikasi lain";
         }
+        if (m.length() > 80) m = m.substring(0, 80);
+        return m;
     }
 
     @Override

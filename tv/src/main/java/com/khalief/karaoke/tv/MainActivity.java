@@ -58,6 +58,10 @@ import java.net.URL;
  * WebView cuma dipakai untuk player, dan cuma ditampilkan kalau halaman
  * web memanggil Android.onPageReady() dari initTv().
  *
+ * v1.3.9 (10 Nov 2026): port HTTP/WS pindah otomatis kalau 8080/8081
+ * kepakai aplikasi lain di TV; URL polling memakai port aktual dari
+ * service; kalau server tetap gagal, layar menampilkan alasannya.
+ *
  * Perbaikan 6 Nov 2026 (dipertahankan): dulu WebView langsung load URL
  * begitu activity dibuat, padahal service server baru mulai belakangan
  * (startService itu async). Hasilnya halaman gagal dimuat dengan
@@ -66,9 +70,24 @@ import java.net.URL;
  */
 public class MainActivity extends Activity {
 
-    private static final String TV_URL = "http://localhost:8080/?mode=tv";
-    private static final String INFO_URL = "http://127.0.0.1:8080/api/info";
-    private static final String QR_URL = "http://127.0.0.1:8080/qr.png";
+    /** v1.3.9: port HTTP bisa pindah kalau 8080 kepakai (lihat KaraokeServer).
+        URL selalu memakai port aktual dari service, default 8080. */
+    private static int httpPort() {
+        int p = KaraokeService.httpPort;
+        return p > 0 ? p : 8080;
+    }
+
+    private static String tvUrl() {
+        return "http://localhost:" + httpPort() + "/?mode=tv";
+    }
+
+    private static String infoUrl() {
+        return "http://127.0.0.1:" + httpPort() + "/api/info";
+    }
+
+    private static String qrUrl() {
+        return "http://127.0.0.1:" + httpPort() + "/qr.png";
+    }
     private static final int POLL_INTERVAL_MS = 1000;
     private static final int FAIL_AFTER = 10;   // ~10 detik tanpa jawaban server
     private static final int MAX_RETRIES = 10;
@@ -124,7 +143,7 @@ public class MainActivity extends Activity {
                         @Override
                         public void run() {
                             if (!destroyed) {
-                                webView.loadUrl(TV_URL);
+                                webView.loadUrl(tvUrl());
                             }
                         }
                     }, 1000);
@@ -282,7 +301,7 @@ public class MainActivity extends Activity {
             public void run() {
                 int fails = 0;
                 while (!destroyed) {
-                    String body = httpGet(INFO_URL);
+                    String body = httpGet(infoUrl());
                     if (body != null) {
                         fails = 0;
                         try {
@@ -293,7 +312,7 @@ public class MainActivity extends Activity {
                             final int expires = info.optInt("codeExpiresIn", -1);
                             final boolean codeChanged = !code.equals(lastCode);
                             if (codeChanged) lastCode = code;
-                            final Bitmap qr = codeChanged ? httpGetBitmap(QR_URL) : null;
+                            final Bitmap qr = codeChanged ? httpGetBitmap(qrUrl()) : null;
                             mainHandler.post(new Runnable() {
                                 @Override public void run() {
                                     if (!destroyed) applyInfo(code, ip, connected, expires, qr);
@@ -305,7 +324,7 @@ public class MainActivity extends Activity {
                                     @Override public void run() {
                                         if (!destroyed) {
                                             retries = 0;
-                                            webView.loadUrl(TV_URL);
+                                            webView.loadUrl(tvUrl());
                                         }
                                     }
                                 });
@@ -320,7 +339,12 @@ public class MainActivity extends Activity {
                                 @Override public void run() {
                                     if (!destroyed && statusText != null) {
                                         statusText.setVisibility(View.VISIBLE);
-                                        statusText.setText("Server tidak bisa jalan. Tutup aplikasi ini lalu buka lagi.");
+                                        String err = KaraokeService.lastError;
+                                        if (err != null && err.length() > 0) {
+                                            statusText.setText("Server tidak bisa jalan: " + err + ". Coba restart TV.");
+                                        } else {
+                                            statusText.setText("Server tidak bisa jalan. Tutup aplikasi ini lalu buka lagi.");
+                                        }
                                     }
                                 }
                             });
@@ -356,7 +380,7 @@ public class MainActivity extends Activity {
             lastQr = qr;
         }
         if (ipText != null && ip.length() > 0) {
-            ipText.setText("TV: " + ip + " - port 8080");
+            ipText.setText("TV: " + ip + " - port " + httpPort());
         }
         if (countdownText != null) {
             if (connected) countdownText.setText("HP terhubung - QR dijeda");

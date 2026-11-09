@@ -9,6 +9,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Collections;
@@ -47,6 +49,11 @@ public class KaraokeServer {
     public static final int HTTP_PORT = 8080;
     public static final int WS_PORT = 8081;
 
+    /** v1.3.9: pasangan port (HTTP, WS) yang dicoba berurutan. Kalau 8080/8081
+        dipakai aplikasi lain di TV, server pindah ke pasangan berikut supaya
+        QR tetap muncul, bukan mati diam-diam. */
+    public static final int[][] PORT_PAIRS = {{8080, 8081}, {8082, 8083}, {18080, 18081}, {8888, 8889}};
+
     /* Rotasi kode pairing: selagi tidak ada HP terhubung, kode diganti
        berkala supaya tiap sesi dapat QR baru (minta user 6 Nov 2026).
        Default 30 detik, bisa di-override buat tes:
@@ -74,15 +81,19 @@ public class KaraokeServer {
     private final java.util.concurrent.atomic.AtomicInteger phoneCount =
             new java.util.concurrent.atomic.AtomicInteger(0);
     private final java.util.concurrent.ScheduledExecutorService rotator;
-    private final KaraokeHttpServer http;
-    private final KaraokeWsServer ws;
+    private final AssetProvider assets;
+    private final QrProvider qr;
+    private KaraokeHttpServer http;
+    private KaraokeWsServer ws;
+    private int httpPort = -1;
+    private int wsPort = -1;
 
     public KaraokeServer(String ip, String code, AssetProvider assets, QrProvider qr) {
         this.ip = ip;
         this.code = code;
+        this.assets = assets;
+        this.qr = qr;
         this.codeChangedAt = System.currentTimeMillis();
-        this.http = new KaraokeHttpServer(HTTP_PORT, assets, qr, this);
-        this.ws = new KaraokeWsServer(new InetSocketAddress(WS_PORT), this);
         java.util.concurrent.ThreadFactory daemon = new java.util.concurrent.ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -98,15 +109,64 @@ public class KaraokeServer {
         }, 1, 1, java.util.concurrent.TimeUnit.SECONDS);
     }
 
-    public void start() throws IOException {
-        http.start();
-        ws.start();
+    /** Coba tiap pasangan port sampai satu berhasil. Mengembalikan port HTTP
+        yang dipakai. Kalau semua gagal, lempar IOException terakhir. */
+    public int start() throws IOException {
+        IOException last = null;
+        for (int[] pair : PORT_PAIRS) {
+            int hp = pair[0];
+            int wp = pair[1];
+            if (!portFree(hp) || !portFree(wp)) continue;
+            KaraokeHttpServer h = new KaraokeHttpServer(hp, assets, qr, this);
+            KaraokeWsServer w = new KaraokeWsServer(new InetSocketAddress(wp), this);
+            try {
+                h.start();
+            } catch (IOException e) {
+                last = e;
+                try { h.stop(); } catch (Exception ignored) {}
+                continue;
+            }
+            w.start();
+            if (!w.waitStarted(2000)) {
+                last = w.startError != null
+                        ? new IOException(w.startError.getMessage())
+                        : new IOException("websocket tidak bisa jalan di port " + wp);
+                try { h.stop(); } catch (Exception ignored) {}
+                try { w.stop(100); } catch (Exception ignored) {}
+                continue;
+            }
+            http = h;
+            ws = w;
+            httpPort = hp;
+            wsPort = wp;
+            return httpPort;
+        }
+        if (last != null) throw last;
+        throw new IOException("semua port dicoba sudah dipakai");
+    }
+
+    public int getHttpPort() { return httpPort; }
+    public int getWsPort() { return wsPort; }
+
+    /** Cek cepat apakah port TCP bebas (bind lalu lepas). */
+    private static boolean portFree(int port) {
+        ServerSocket s = null;
+        try {
+            s = new ServerSocket(port);
+            return true;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            if (s != null) {
+                try { s.close(); } catch (IOException ignored) {}
+            }
+        }
     }
 
     public void stop() {
         try { rotator.shutdownNow(); } catch (Exception ignored) {}
-        try { http.stop(); } catch (Exception ignored) {}
-        try { ws.stop(1000); } catch (Exception ignored) {}
+        try { if (http != null) http.stop(); } catch (Exception ignored) {}
+        try { if (ws != null) ws.stop(1000); } catch (Exception ignored) {}
     }
 
     public String getCode() { return code; }
@@ -163,11 +223,13 @@ public class KaraokeServer {
     }
 
     public String controllerUrl() {
-        return "http://" + ip + ":" + HTTP_PORT + "/?mode=phone&code=" + code;
+        int p = httpPort > 0 ? httpPort : HTTP_PORT;
+        return "http://" + ip + ":" + p + "/?mode=phone&code=" + code;
     }
 
     public String infoJson() {
-        return "{\"code\":\"" + code + "\",\"ip\":\"" + ip + "\",\"wsPort\":" + WS_PORT
+        int wp = wsPort > 0 ? wsPort : WS_PORT;
+        return "{\"code\":\"" + code + "\",\"ip\":\"" + ip + "\",\"wsPort\":" + wp
                 + ",\"phoneConnected\":" + isPhoneConnected()
                 + ",\"codeExpiresIn\":" + getCodeExpiresIn() + "}";
     }
@@ -314,6 +376,24 @@ public class KaraokeServer {
         private final Set<WebSocket> authed =
                 Collections.newSetFromMap(new ConcurrentHashMap<WebSocket, Boolean>());
         private final Map<WebSocket, String> roles = new ConcurrentHashMap<>();
+        /* v1.3.9: penanda hasil start. Java-WebSocket tidak melempar saat
+           bind gagal, melainkan memanggil onError tanpa koneksi. start()
+           di luar memakai dua flag ini untuk tahu apakah server WS
+           benar-benar listen. */
+        volatile boolean startedOk = false;
+        volatile Exception startError = null;
+
+        /** Tunggu sampai onStart terpanggil (server WS benar-benar listen),
+            atau sampai onError tanpa koneksi (gagal bind). */
+        boolean waitStarted(long timeoutMs) {
+            long end = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < end) {
+                if (startedOk) return true;
+                if (startError != null) return false;
+                try { Thread.sleep(50); } catch (InterruptedException e) { return false; }
+            }
+            return startedOk;
+        }
         /* Koneksi mic native HP (auth dengan "mic":true): ditandai supaya
            saat koneksi ini putus, TV tahu mic berhenti walau UI HP masih
            terhubung. */
@@ -447,6 +527,12 @@ public class KaraokeServer {
 
         @Override
         public void onError(WebSocket conn, Exception ex) {
+            // v1.3.9: error tanpa koneksi = gagal start (mis. port sudah
+            // dipakai). Simpan supaya start() di luar bisa pindah port.
+            if (conn == null) {
+                startError = ex;
+                return;
+            }
             // koneksi bermasalah: bersihkan dari daftar. v1.3.1: kalau
             // yang rusak itu koneksi mic, beri tahu TV seperti onClose
             // (dulu cuma dihapus diam-diam, mic bisa nyangkut jalan).
@@ -466,6 +552,7 @@ public class KaraokeServer {
         @Override
         public void onStart() {
             // server WS jalan
+            startedOk = true;
         }
     }
 

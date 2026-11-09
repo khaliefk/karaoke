@@ -63,8 +63,8 @@ public class MicStreamer {
     private volatile WebSocketClient currentWs;
     private volatile AudioRecord currentRecorder;
 
-    public MicStreamer(String tvIp, String code, Listener listener) {
-        this.wsUrl = "ws://" + tvIp + ":8081";
+    public MicStreamer(String tvIp, int wsPort, String code, Listener listener) {
+        this.wsUrl = "ws://" + tvIp + ":" + wsPort;
         this.code = code;
         this.listener = listener;
     }

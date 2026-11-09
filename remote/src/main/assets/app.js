@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.3.8';
+  var APP_VERSION = '1.3.9';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -391,7 +391,13 @@
             $('qrImg').src = '/qr.png?t=' + Date.now();
           }
         }
-        if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port 8080';
+        if (info.ip) $('waitIp').textContent = 'TV: ' + info.ip + ' · port ' + location.port;
+        /* v1.3.9: server TV bisa pindah port WS kalau 8081 kepakai.
+           /api/info selalu membawa wsPort aktual; pakai itu supaya
+           halaman HP tetap nyambung walau port pindah. */
+        if (typeof info.wsPort === 'number' && info.wsPort > 0 && info.wsPort !== WS_PORT) {
+          WS_PORT = info.wsPort;
+        }
         var cd = $('qrCountdown');
         if (cd) {
           if (info.phoneConnected) cd.textContent = 'HP terhubung — QR dijeda';

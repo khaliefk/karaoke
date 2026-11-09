@@ -1,7 +1,7 @@
 {
-  "code": 13,
-  "notes": "v1.3.8: tema tampilan Remote \u2014 Sistem/Gelap/Terang, di layar pilihan dan halaman Remote (TV tetap gelap). v1.3.7: buka Remote langsung tampil pilihan: scan QR atau masukkan kode manual (tidak langsung ke kamera).",
+  "code": 14,
+  "notes": "v1.3.9: server TV pindah port otomatis kalau 8080/8081 kepakai, dan pesan error jelas kalau server gagal jalan. v1.3.8: tema tampilan Remote, Sistem/Gelap/Terang, di layar pilihan dan halaman Remote (TV tetap gelap). v1.3.7: buka Remote langsung tampil pilihan, scan QR atau masukkan kode manual (tidak langsung ke kamera).",
   "remote": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-remote-debug.apk",
   "tv": "https://raw.githubusercontent.com/khaliefk/karaoke/main/apks/karaoke-tv-debug.apk",
-  "version": "1.3.8"
+  "version": "1.3.9"
 }
