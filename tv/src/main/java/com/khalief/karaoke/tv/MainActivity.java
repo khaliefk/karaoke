@@ -117,6 +117,12 @@ public class MainActivity extends Activity {
         mainHandler = new Handler(Looper.getMainLooper());
 
         Intent svc = new Intent(this, KaraokeService.class);
+        /* v1.4.2: kalau service sudah jalan dari sebelum activity ini
+           dibuat (mis. habis update, atau activity sempat ditutup
+           sementara service foreground tetap hidup), minta service
+           mulai bersih dengan server baru. Jangan pakai server lama
+           yang mungkin nyangkut di port cadangan. */
+        if (KaraokeService.running) svc.setAction(KaraokeService.ACTION_RESTART);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(svc);
         } else {

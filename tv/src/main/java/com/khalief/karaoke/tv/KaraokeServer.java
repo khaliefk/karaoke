@@ -361,7 +361,12 @@ public class KaraokeServer {
         private Response serveAsset(String name, String mime) {
             try {
                 InputStream in = assets.open(name);
-                return newChunkedResponse(Response.Status.OK, mime, in);
+                Response r = newChunkedResponse(Response.Status.OK, mime, in);
+                /* v1.4.2: jangan biarkan WebView menyimpan file web lama.
+                   Sesudah TV update, halaman baru harus dapat file baru,
+                   bukan cache dari server lama. */
+                r.addHeader("Cache-Control", "no-store");
+                return r;
             } catch (IOException e) {
                 return newFixedLengthResponse(Response.Status.NOT_FOUND,
                         "text/plain", "missing asset: " + name);

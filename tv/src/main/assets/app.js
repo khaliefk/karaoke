@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.4.1';
+  var APP_VERSION = '1.4.2';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -159,6 +159,26 @@
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { /* onclose yang urus reconnect */ };
+  }
+
+  /* v1.4.2: halaman HP wajib tahu port WS asli sebelum connect.
+     Server TV bisa pindah port WS kalau 8081 kepakai (jatuh ke
+     8083/18081/8889); port itu cuma ada di /api/info. Dulu halaman HP
+     langsung connect ke 8081 yang ditulis mati di atas, jadi kalau
+     server pindah port, HP nyambung ke server lama (atau ke port
+     kosong) dan auth ditolak 4001 "bad code" walau kode di QR benar.
+     Tanya /api/info dulu; kalau fetch gagal, pakai port HTTP + 1. */
+  function connectWithWsPort() {
+    var fallback = 8081;
+    try {
+      var hp = parseInt(location.port, 10);
+      if (hp > 0) fallback = hp + 1;
+    } catch (e) {}
+    fetch('/api/info?t=' + Date.now()).then(function (r) { return r.json(); }).then(function (info) {
+      if (typeof info.wsPort === 'number' && info.wsPort > 0) WS_PORT = info.wsPort;
+      else WS_PORT = fallback;
+      connect();
+    }).catch(function () { WS_PORT = fallback; connect(); });
   }
 
   /* Putus manual dari TV: tutup socket, matikan auto-reconnect. TV tetap
@@ -1182,5 +1202,5 @@
   var ul = $('btnUpdateLater'); if (ul) ul.onclick = function () { closeUpdateModal(true); };
   var um = $('updateModal');
   if (um) um.addEventListener('click', function (e) { if (e.target === um) closeUpdateModal(true); });
-  connect();
+  if (MODE === 'phone') connectWithWsPort(); else connect();
 })();
