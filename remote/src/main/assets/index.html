@@ -21,7 +21,7 @@
     <div id="pairCode" class="wait-code">------</div>
     <div id="qrCountdown" class="wait-countdown">QR baru dalam 30 dtk</div>
     <div id="waitIp" class="wait-ip"></div>
-    <div class="wait-version" id="tvVersion">v1.3.8</div>
+    <div class="wait-version" id="tvVersion">v1.4.0</div>
     <div class="wait-actions">
       <button id="btnAboutWait" class="btn ghost-tv">About</button>
       <button id="btnExitWait" class="btn exit-btn">✕ Keluar</button>
@@ -66,6 +66,14 @@
     <div id="micStatus" class="mic-status"></div>
   </section>
 
+  <!-- v1.4.0: dua tab kiri-kanan. Kiri = Cari (pencarian + sedang
+       diputar), kanan = Playlist (antrean tersimpan di HP). -->
+  <nav class="phone-tabs">
+    <button id="tabBtnCari" class="tab-btn active">🔍 Cari</button>
+    <button id="tabBtnPlaylist" class="tab-btn">🎵 Playlist (<span id="tabPlaylistCount">0</span>)</button>
+  </nav>
+
+  <div id="tabCari">
   <section class="search-box">
     <input id="searchInput" type="search" placeholder="Cari lagu karaoke…" enterkeyhint="search">
     <button id="searchBtn" class="btn primary">Cari</button>
@@ -92,21 +100,29 @@
       <span id="volVal">80</span>
     </div>
   </section>
+  </div>
 
+  <div id="tabPlaylist" class="hidden">
+  <!-- v1.4.0: playlist tersimpan di HP. Tombol ini SATU-SATUNYA jalan
+       playlist masuk ke TV, tidak ada kirim otomatis saat sambung. -->
+  <button id="btnPlayPlaylist" class="btn primary playlist-play">▶ Putar playlist ke TV</button>
+  <div id="playlistStatus" class="playlist-status"></div>
   <section class="queue-sec">
     <div class="queue-head">
-      <span>Antrean (<span id="queueCount">0</span>)</span>
+      <span>Playlist (<span id="queueCount">0</span>)</span>
       <button id="btnClearQueue" class="btn small danger">Bersihkan</button>
     </div>
     <div id="queueList" class="queue-list"></div>
   </section>
+  <button id="btnDeleteSaved" class="btn ghost small danger-outline">Hapus simpanan playlist</button>
+  </div>
 
   <button id="btnRescan" class="btn ghost hidden" onclick="rescanQr()">Scan Ulang QR TV</button>
 
   <footer class="phone-footer">
     <button id="btnAboutPhone" class="btn ghost small">About</button>
     <button id="btnExitPhone" class="btn ghost small danger-outline">Keluar</button>
-    <span class="phone-version" id="phoneVersion">v1.3.8</span>
+    <span class="phone-version" id="phoneVersion">v1.4.0</span>
   </footer>
 </div>
 

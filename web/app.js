@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.3.9';
+  var APP_VERSION = '1.4.0';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -151,9 +151,11 @@
       if (manualDisconnect) {
         setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
         var b2 = $('btnRescan'); if (b2) b2.classList.remove('hidden');
+        renderPlaylist(liveQueue); // tampilkan playlist tersimpan
         return;
       }
       setConn(false, 'Koneksi putus. Menghubungkan ulang…');
+      renderPlaylist(liveQueue); // tampilkan playlist tersimpan selama reconnect
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { /* onclose yang urus reconnect */ };
@@ -172,8 +174,9 @@
     var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
     var b = $('btnRescan'); if (b) b.classList.remove('hidden');
     var card = $('npCard'); if (card) card.classList.add('hidden');
-    $('queueCount').textContent = '0';
-    $('queueList').innerHTML = '';
+    /* v1.4.0: jangan kosongkan daftar, tampilkan playlist tersimpan
+       supaya user bisa kirim ulang begitu sambung lagi. */
+    renderPlaylist([]);
     setSearchStatus('Putus dari TV. TV tetap jalan, cuma HP-nya yang putus.');
   }
 
@@ -434,6 +437,139 @@
   var lastState = null;
   var volDragging = false;
 
+  /* ---------- Playlist tersimpan (v1.4.0) ----------
+     Antrean TV otomatis tersimpan di HP (localStorage) tiap kali
+     berubah, jadi tidak hilang saat HP putus atau aplikasi ditutup.
+     Playlist TIDAK dikirim otomatis ke TV: cuma dikirim kalau user
+     menekan tombol "Putar playlist" di tab Playlist. Tambah manual
+     satu-satu dari tab Cari tetap jalan seperti biasa. */
+  var PLAYLIST_KEY = 'karaokePlaylist.v1';
+  var savedPlaylist = [];      // [{videoId, title, thumb}]
+  var savedPlaylistJson = '';  // JSON terakhir yang tersimpan
+  var liveQueue = [];          // antrean TV terakhir dari state
+
+  function loadSavedPlaylist() {
+    savedPlaylist = [];
+    savedPlaylistJson = '';
+    try {
+      var raw = localStorage.getItem(PLAYLIST_KEY);
+      if (raw) {
+        var arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          savedPlaylist = arr.filter(function (it) { return it && it.videoId; })
+            .map(function (it) { return { videoId: it.videoId, title: it.title || '', thumb: it.thumb || '' }; });
+          savedPlaylistJson = JSON.stringify(savedPlaylist);
+        }
+      }
+    } catch (e) {}
+  }
+
+  function storeSavedPlaylist() {
+    try { localStorage.setItem(PLAYLIST_KEY, JSON.stringify(savedPlaylist)); } catch (e) {}
+    savedPlaylistJson = JSON.stringify(savedPlaylist);
+  }
+
+  /* Simpan antrean TV kalau isinya berubah dan tidak kosong. Antrean
+     kosong tidak menimpa simpanan: TV mengosongkan antrean sendiri
+     saat sesi selesai atau lagu habis, dan itu bukan perintah hapus. */
+  function savePlaylistFromQueue(q) {
+    if (!q || !q.length) return;
+    var items = q.map(function (it) { return { videoId: it.videoId, title: it.title || '', thumb: it.thumb || '' }; });
+    var json = JSON.stringify(items);
+    if (json === savedPlaylistJson) return;
+    savedPlaylist = items;
+    storeSavedPlaylist();
+  }
+
+  function clearSavedPlaylist() {
+    savedPlaylist = [];
+    try { localStorage.removeItem(PLAYLIST_KEY); } catch (e) {}
+    savedPlaylistJson = '';
+  }
+
+  function setPlaylistStatus(t) { var el = $('playlistStatus'); if (el) el.textContent = t || ''; }
+
+  /* Daftar yang tampil di tab Playlist. Saat terhubung: antrean TV yang
+     sedang jalan. Saat putus: simpanan di HP, supaya user bisa lihat
+     dan kirim ulang begitu sambung lagi. */
+  function renderPlaylist(q) {
+    var connected = wsOk;
+    var shown = connected ? (q || []) : savedPlaylist;
+    var isSavedView = !connected;
+    $('queueCount').textContent = shown.length;
+    var tabCount = $('tabPlaylistCount');
+    if (tabCount) tabCount.textContent = shown.length;
+    var list = $('queueList');
+    list.innerHTML = '';
+    if (!shown.length) {
+      var empty = document.createElement('div');
+      empty.className = 'queue-empty';
+      empty.textContent = connected
+        ? (savedPlaylist.length ? 'Antrean TV kosong. Playlist tersimpan ada ' + savedPlaylist.length + ' lagu.' : 'Antrean kosong. Cari lagu lalu ketuk +.')
+        : 'Playlist kosong. Cari lagu di tab Cari lalu ketuk +.';
+      list.appendChild(empty);
+      setPlaylistStatus(connected && savedPlaylist.length ? 'Ketuk "Putar playlist" untuk kirim simpanan ke TV.' : '');
+      return;
+    }
+    setPlaylistStatus(isSavedView
+      ? 'Tersimpan di HP, belum dikirim ke TV. Sambungkan ke TV lalu ketuk "Putar playlist".'
+      : 'Antrean di TV, otomatis tersimpan di HP.');
+    shown.forEach(function (it, idx) {
+      var row = document.createElement('div');
+      row.className = 'queue-item';
+      var img = document.createElement('img');
+      img.src = it.thumb || '';
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      var t = document.createElement('div');
+      t.className = 'result-title';
+      t.textContent = (idx + 1) + '. ' + it.title;
+      t.style.flex = '1';
+      var rm = document.createElement('button');
+      rm.className = 'queue-remove';
+      rm.textContent = '✕';
+      rm.onclick = function (ev) {
+        ev.stopPropagation();
+        if (isSavedView) {
+          /* putus: hapus dari simpanan di HP, antrean TV tidak kena */
+          savedPlaylist.splice(idx, 1);
+          storeSavedPlaylist();
+          renderPlaylist(liveQueue);
+        } else {
+          send({ type: 'queue_remove', index: idx });
+        }
+      };
+      row.appendChild(img); row.appendChild(t); row.appendChild(rm);
+      if (!isSavedView) {
+        /* ketuk baris antrean = putar lagu itu sekarang (keluar dari antrean) */
+        row.onclick = function () {
+          send({ type: 'queue_remove', index: idx });
+          send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
+          setSearchStatus('Memutar dari antrean: ' + it.title);
+        };
+      }
+      list.appendChild(row);
+    });
+  }
+
+  /* Kirim seluruh playlist tersimpan ke TV, satu lagu satu pesan,
+     dijeda 150 ms supaya server TV tidak kebanjiran. Cuma jalan saat
+     terhubung; kalau belum, beri tahu user untuk sambung dulu. */
+  function playSavedPlaylist() {
+    if (!savedPlaylist.length) { setPlaylistStatus('Playlist kosong, belum ada lagu tersimpan.'); return; }
+    if (!wsOk) { setPlaylistStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR), baru ketuk Putar playlist.'); return; }
+    var items = savedPlaylist.slice();
+    setPlaylistStatus('Mengirim ' + items.length + ' lagu ke TV…');
+    items.forEach(function (it, i) {
+      setTimeout(function () {
+        send({ type: 'queue_add', videoId: it.videoId, title: it.title, thumb: it.thumb });
+        if (i === items.length - 1) {
+          setPlaylistStatus(items.length + ' lagu dikirim ke TV.');
+        }
+      }, i * 150);
+    });
+  }
+
   /* ---------- Mic HP (v1.3.0) ---------- */
   /* Satu tombol ON/OFF, tanpa setting lain. ON = mic HP aktif, suara
      dikirim ke TV (keluar lewat speaker TV). OFF = pakai mic wireless
@@ -663,48 +799,29 @@
       $('btnPlayPause').textContent = '▶';
     }
     var q = s.queue || [];
-    $('queueCount').textContent = q.length;
-    var list = $('queueList');
-    list.innerHTML = '';
-    if (!q.length) {
-      var empty = document.createElement('div');
-      empty.className = 'queue-empty';
-      empty.textContent = 'Antrean kosong. Cari lagu lalu ketuk +.';
-      list.appendChild(empty);
-    }
-    q.forEach(function (it, idx) {
-      var row = document.createElement('div');
-      row.className = 'queue-item';
-      var img = document.createElement('img');
-      img.src = it.thumb || '';
-      img.alt = '';
-      img.referrerPolicy = 'no-referrer';
-      var t = document.createElement('div');
-      t.className = 'result-title';
-      t.textContent = (idx + 1) + '. ' + it.title;
-      t.style.flex = '1';
-      var rm = document.createElement('button');
-      rm.className = 'queue-remove';
-      rm.textContent = '✕';
-      rm.onclick = function (ev) {
-        ev.stopPropagation();
-        send({ type: 'queue_remove', index: idx });
-      };
-      row.appendChild(img); row.appendChild(t); row.appendChild(rm);
-      /* ketuk baris antrean = putar lagu itu sekarang (keluar dari antrean) */
-      row.onclick = function () {
-        send({ type: 'queue_remove', index: idx });
-        send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
-        setSearchStatus('Memutar dari antrean: ' + it.title);
-      };
-      list.appendChild(row);
-    });
+    liveQueue = q;
+    savePlaylistFromQueue(q); // v1.4.0: antrean otomatis tersimpan di HP
+    renderPlaylist(q);
   }
 
   function initPhone() {
     $('phoneView').classList.remove('hidden');
     initTheme(); // tema Sistem/Gelap/Terang (v1.3.8)
     setConn(false, 'Menghubungkan ke TV…');
+    /* v1.4.0: dua tab kiri-kanan. Kiri = Cari, kanan = Playlist. */
+    var tabCari = $('tabCari'), tabPlaylist = $('tabPlaylist');
+    var tabBtnCari = $('tabBtnCari'), tabBtnPlaylist = $('tabBtnPlaylist');
+    function showTab(name) {
+      var cari = name !== 'playlist';
+      if (tabCari) tabCari.classList.toggle('hidden', !cari);
+      if (tabPlaylist) tabPlaylist.classList.toggle('hidden', cari);
+      if (tabBtnCari) tabBtnCari.classList.toggle('active', cari);
+      if (tabBtnPlaylist) tabBtnPlaylist.classList.toggle('active', !cari);
+    }
+    if (tabBtnCari) tabBtnCari.onclick = function () { showTab('cari'); };
+    if (tabBtnPlaylist) tabBtnPlaylist.onclick = function () { showTab('playlist'); };
+    loadSavedPlaylist();
+    renderPlaylist(liveQueue);
     $('btnDisconnect').onclick = disconnectTv;
     $('btnMic').onclick = toggleMic; // tombol mic HP (v1.3.0)
     /* slider volume mic: kirim langsung tiap geseran (tanpa debounce),
@@ -730,7 +847,18 @@
     $('btnNext').onclick = function () { send({ type: 'next' }); };
     $('btnPrev').onclick = function () { send({ type: 'prev' }); };
     $('btnReplay').onclick = function () { send({ type: 'replay' }); };
-    $('btnClearQueue').onclick = function () { send({ type: 'queue_clear' }); };
+    /* Bersihkan = hapus antrean TV SEKALIGUS simpanan di HP. Kalau cuma
+       antrean TV yang dibersihkan, simpanan lama akan muncul lagi. */
+    $('btnClearQueue').onclick = function () { send({ type: 'queue_clear' }); clearSavedPlaylist(); };
+    /* v1.4.0: tombol Putar playlist + hapus simpanan. */
+    var playBtn = $('btnPlayPlaylist');
+    if (playBtn) playBtn.onclick = playSavedPlaylist;
+    var delBtn = $('btnDeleteSaved');
+    if (delBtn) delBtn.onclick = function () {
+      clearSavedPlaylist();
+      renderPlaylist(liveQueue);
+      setPlaylistStatus('Simpanan playlist dihapus. Antrean TV tidak berubah.');
+    };
     /* ketuk bilah progres = loncat (seek) ke bagian lagu itu */
     $('npProgress').addEventListener('click', function (ev) {
       if (!lastState || !lastState.current || !lastState.duration) return;
