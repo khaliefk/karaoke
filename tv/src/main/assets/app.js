@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.4.0';
+  var APP_VERSION = '1.4.1';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -124,7 +124,7 @@
     ws.onopen = function () {
       wsOk = true;
       send({ type: 'auth', role: MODE, code: CODE });
-      if (MODE === 'phone') { send({ type: 'get_state' }); }
+      if (MODE === 'phone') { loadSavedPlaylist(); renderPlaylist(); send({ type: 'get_state' }); }
       var d = $('btnDisconnect'); if (d) d.classList.remove('hidden');
       setConn(true, 'Terhubung ke TV');
     };
@@ -151,11 +151,11 @@
       if (manualDisconnect) {
         setConn(false, 'Terputus dari TV. Scan ulang QR untuk sambung lagi.');
         var b2 = $('btnRescan'); if (b2) b2.classList.remove('hidden');
-        renderPlaylist(liveQueue); // tampilkan playlist tersimpan
+        renderPlaylist(); // tampilkan playlist tersimpan
         return;
       }
       setConn(false, 'Koneksi putus. Menghubungkan ulang…');
-      renderPlaylist(liveQueue); // tampilkan playlist tersimpan selama reconnect
+      renderPlaylist(); // tampilkan playlist tersimpan selama reconnect
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { /* onclose yang urus reconnect */ };
@@ -174,9 +174,9 @@
     var d = $('btnDisconnect'); if (d) d.classList.add('hidden');
     var b = $('btnRescan'); if (b) b.classList.remove('hidden');
     var card = $('npCard'); if (card) card.classList.add('hidden');
-    /* v1.4.0: jangan kosongkan daftar, tampilkan playlist tersimpan
+    /* v1.4.1: jangan kosongkan daftar, tampilkan playlist tersimpan
        supaya user bisa kirim ulang begitu sambung lagi. */
-    renderPlaylist([]);
+    renderPlaylist();
     setSearchStatus('Putus dari TV. TV tetap jalan, cuma HP-nya yang putus.');
   }
 
@@ -437,20 +437,27 @@
   var lastState = null;
   var volDragging = false;
 
-  /* ---------- Playlist tersimpan (v1.4.0) ----------
-     Antrean TV otomatis tersimpan di HP (localStorage) tiap kali
-     berubah, jadi tidak hilang saat HP putus atau aplikasi ditutup.
-     Playlist TIDAK dikirim otomatis ke TV: cuma dikirim kalau user
-     menekan tombol "Putar playlist" di tab Playlist. Tambah manual
-     satu-satu dari tab Cari tetap jalan seperti biasa. */
+  /* ---------- Playlist tersimpan (v1.4.1) ----------
+     Playlist = kumpulan lagu PILIHAN user yang tersimpan di HP
+     (localStorage), BUKAN cerminan antrean TV. Aturannya:
+     - Lagu masuk playlist saat user menekan "+" di tab Cari:
+       langsung disimpan saat itu juga, tidak menunggu gema
+       state dari TV — jadi tetap ada walau koneksi putus.
+     - Antrean TV yang mengecil saat lagu diputar TIDAK PERNAH
+       menimpa playlist (bug v1.4.0: simpanan ketimpa antrean
+       live yang menyusut, playlist terasa hilang).
+     - Playlist TIDAK dikirim otomatis ke TV: cuma dikirim kalau
+       user menekan tombol "Putar playlist" di tab Playlist.
+     - "Putar playlist" = memainkan playlist: antrean TV
+       dibersihkan dulu lalu diisi playlist, lagu pertama
+       langsung diputar (anti ganda, tekan dua kali hasilnya
+       sama). Tambah manual satu-satu dari tab Cari tetap bisa. */
   var PLAYLIST_KEY = 'karaokePlaylist.v1';
   var savedPlaylist = [];      // [{videoId, title, thumb}]
-  var savedPlaylistJson = '';  // JSON terakhir yang tersimpan
   var liveQueue = [];          // antrean TV terakhir dari state
 
   function loadSavedPlaylist() {
     savedPlaylist = [];
-    savedPlaylistJson = '';
     try {
       var raw = localStorage.getItem(PLAYLIST_KEY);
       if (raw) {
@@ -458,7 +465,6 @@
         if (Array.isArray(arr)) {
           savedPlaylist = arr.filter(function (it) { return it && it.videoId; })
             .map(function (it) { return { videoId: it.videoId, title: it.title || '', thumb: it.thumb || '' }; });
-          savedPlaylistJson = JSON.stringify(savedPlaylist);
         }
       }
     } catch (e) {}
@@ -466,108 +472,138 @@
 
   function storeSavedPlaylist() {
     try { localStorage.setItem(PLAYLIST_KEY, JSON.stringify(savedPlaylist)); } catch (e) {}
-    savedPlaylistJson = JSON.stringify(savedPlaylist);
   }
 
-  /* Simpan antrean TV kalau isinya berubah dan tidak kosong. Antrean
-     kosong tidak menimpa simpanan: TV mengosongkan antrean sendiri
-     saat sesi selesai atau lagu habis, dan itu bukan perintah hapus. */
-  function savePlaylistFromQueue(q) {
-    if (!q || !q.length) return;
-    var items = q.map(function (it) { return { videoId: it.videoId, title: it.title || '', thumb: it.thumb || '' }; });
-    var json = JSON.stringify(items);
-    if (json === savedPlaylistJson) return;
-    savedPlaylist = items;
+  /* Tambah satu lagu ke playlist tersimpan (dedupe by videoId).
+     Dipanggil saat user menekan "+" — langsung simpan, jangan
+     tunggu gema state dari TV. */
+  function addToSavedPlaylist(it) {
+    if (!it || !it.videoId) return false;
+    for (var i = 0; i < savedPlaylist.length; i++) {
+      if (savedPlaylist[i].videoId === it.videoId) return false;
+    }
+    savedPlaylist.push({ videoId: it.videoId, title: it.title || '', thumb: it.thumb || '' });
     storeSavedPlaylist();
+    return true;
+  }
+
+  function removeFromSavedPlaylist(videoId) {
+    for (var i = 0; i < savedPlaylist.length; i++) {
+      if (savedPlaylist[i].videoId === videoId) { savedPlaylist.splice(i, 1); storeSavedPlaylist(); return true; }
+    }
+    return false;
+  }
+
+  /* Cari indeks lagu di antrean TV (buat hapus/putar yang tepat —
+     indeks baris playlist TIDAK SAMA dengan indeks antrean TV). */
+  function findLiveIndex(videoId) {
+    for (var i = 0; i < liveQueue.length; i++) {
+      if (liveQueue[i].videoId === videoId) return i;
+    }
+    return -1;
   }
 
   function clearSavedPlaylist() {
     savedPlaylist = [];
     try { localStorage.removeItem(PLAYLIST_KEY); } catch (e) {}
-    savedPlaylistJson = '';
   }
 
   function setPlaylistStatus(t) { var el = $('playlistStatus'); if (el) el.textContent = t || ''; }
 
-  /* Daftar yang tampil di tab Playlist. Saat terhubung: antrean TV yang
-     sedang jalan. Saat putus: simpanan di HP, supaya user bisa lihat
-     dan kirim ulang begitu sambung lagi. */
-  function renderPlaylist(q) {
-    var connected = wsOk;
-    var shown = connected ? (q || []) : savedPlaylist;
-    var isSavedView = !connected;
-    $('queueCount').textContent = shown.length;
-    var tabCount = $('tabPlaylistCount');
-    if (tabCount) tabCount.textContent = shown.length;
+  /* Daftar yang tampil di tab Playlist = playlist tersimpan,
+     terhubung atau tidak. Antrean TV yang sedang jalan hanya
+     tampil sebagai baris status di bawah (v1.4.0 dulu menampilkan
+     antrean TV saat terhubung — begitu antrean kosong karena lagu
+     habis / sesi reset, playlist terasa hilang padahal simpanannya
+     ada). */
+  function renderPlaylist() {
     var list = $('queueList');
+    $('queueCount').textContent = savedPlaylist.length;
+    var tabCount = $('tabPlaylistCount');
+    if (tabCount) tabCount.textContent = savedPlaylist.length;
     list.innerHTML = '';
-    if (!shown.length) {
+    if (!savedPlaylist.length) {
       var empty = document.createElement('div');
       empty.className = 'queue-empty';
-      empty.textContent = connected
-        ? (savedPlaylist.length ? 'Antrean TV kosong. Playlist tersimpan ada ' + savedPlaylist.length + ' lagu.' : 'Antrean kosong. Cari lagu lalu ketuk +.')
-        : 'Playlist kosong. Cari lagu di tab Cari lalu ketuk +.';
+      empty.textContent = 'Playlist kosong. Cari lagu di tab Cari lalu ketuk +.';
       list.appendChild(empty);
-      setPlaylistStatus(connected && savedPlaylist.length ? 'Ketuk "Putar playlist" untuk kirim simpanan ke TV.' : '');
-      return;
-    }
-    setPlaylistStatus(isSavedView
-      ? 'Tersimpan di HP, belum dikirim ke TV. Sambungkan ke TV lalu ketuk "Putar playlist".'
-      : 'Antrean di TV, otomatis tersimpan di HP.');
-    shown.forEach(function (it, idx) {
-      var row = document.createElement('div');
-      row.className = 'queue-item';
-      var img = document.createElement('img');
-      img.src = it.thumb || '';
-      img.alt = '';
-      img.referrerPolicy = 'no-referrer';
-      var t = document.createElement('div');
-      t.className = 'result-title';
-      t.textContent = (idx + 1) + '. ' + it.title;
-      t.style.flex = '1';
-      var rm = document.createElement('button');
-      rm.className = 'queue-remove';
-      rm.textContent = '✕';
-      rm.onclick = function (ev) {
-        ev.stopPropagation();
-        if (isSavedView) {
-          /* putus: hapus dari simpanan di HP, antrean TV tidak kena */
-          savedPlaylist.splice(idx, 1);
-          storeSavedPlaylist();
-          renderPlaylist(liveQueue);
-        } else {
-          send({ type: 'queue_remove', index: idx });
-        }
-      };
-      row.appendChild(img); row.appendChild(t); row.appendChild(rm);
-      if (!isSavedView) {
-        /* ketuk baris antrean = putar lagu itu sekarang (keluar dari antrean) */
-        row.onclick = function () {
-          send({ type: 'queue_remove', index: idx });
-          send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
-          setSearchStatus('Memutar dari antrean: ' + it.title);
+    } else {
+      savedPlaylist.forEach(function (it, idx) {
+        var row = document.createElement('div');
+        row.className = 'queue-item';
+        var img = document.createElement('img');
+        img.src = it.thumb || '';
+        img.alt = '';
+        img.referrerPolicy = 'no-referrer';
+        var t = document.createElement('div');
+        t.className = 'result-title';
+        t.textContent = (idx + 1) + '. ' + it.title;
+        t.style.flex = '1';
+        var rm = document.createElement('button');
+        rm.className = 'queue-remove';
+        rm.textContent = '✕';
+        rm.onclick = function (ev) {
+          ev.stopPropagation();
+          /* hapus dari simpanan; kalau lagu itu juga ada di antrean
+             TV, hapus juga dari sana supaya tidak ikut keputar */
+          removeFromSavedPlaylist(it.videoId);
+          if (wsOk) {
+            var li = findLiveIndex(it.videoId);
+            if (li >= 0) send({ type: 'queue_remove', index: li });
+          }
+          renderPlaylist();
         };
-      }
-      list.appendChild(row);
-    });
+        row.appendChild(img); row.appendChild(t); row.appendChild(rm);
+        /* ketuk baris = putar lagu itu sekarang (tetap di playlist) */
+        row.onclick = function () {
+          if (!wsOk) { setPlaylistStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR).'); return; }
+          var li2 = findLiveIndex(it.videoId);
+          if (li2 >= 0) send({ type: 'queue_remove', index: li2 });
+          send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
+          setSearchStatus('Memutar dari playlist: ' + it.title);
+        };
+        list.appendChild(row);
+      });
+    }
+    /* baris status: apa yang sedang terjadi di TV (kalau terhubung) */
+    if (wsOk) {
+      var live = liveQueue.length ? 'Antrean TV: ' + liveQueue.length + ' lagu menunggu.' : 'Antrean TV kosong.';
+      var now = (lastState && lastState.current && lastState.current.title)
+        ? ' Sedang memutar: ' + lastState.current.title : '';
+      setPlaylistStatus(savedPlaylist.length
+        ? 'Tersimpan di HP (' + savedPlaylist.length + ' lagu). ' + live + now
+        : live + now);
+    } else {
+      setPlaylistStatus(savedPlaylist.length
+        ? 'Tersimpan di HP, belum dikirim ke TV. Sambungkan ke TV lalu ketuk "Putar playlist".'
+        : '');
+    }
   }
 
-  /* Kirim seluruh playlist tersimpan ke TV, satu lagu satu pesan,
-     dijeda 150 ms supaya server TV tidak kebanjiran. Cuma jalan saat
-     terhubung; kalau belum, beri tahu user untuk sambung dulu. */
+  /* Putar playlist: antrean TV dibersihkan dulu lalu diisi ulang
+     dari playlist, lagu pertama langsung diputar. Tekan dua kali
+     hasilnya sama — tidak pernah menggandakan (bug v1.4.0: cuma
+     queue_add tanpa clear dan tanpa play, jadi antrean menumpuk
+     dan TV yang lagi idle tidak mulai memutar). */
   function playSavedPlaylist() {
     if (!savedPlaylist.length) { setPlaylistStatus('Playlist kosong, belum ada lagu tersimpan.'); return; }
     if (!wsOk) { setPlaylistStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR), baru ketuk Putar playlist.'); return; }
     var items = savedPlaylist.slice();
-    setPlaylistStatus('Mengirim ' + items.length + ' lagu ke TV…');
-    items.forEach(function (it, i) {
-      setTimeout(function () {
-        send({ type: 'queue_add', videoId: it.videoId, title: it.title, thumb: it.thumb });
-        if (i === items.length - 1) {
-          setPlaylistStatus(items.length + ' lagu dikirim ke TV.');
-        }
-      }, i * 150);
-    });
+    var rest = items.slice(1);
+    setPlaylistStatus('Memutar playlist (' + items.length + ' lagu)…');
+    send({ type: 'queue_clear' });
+    setTimeout(function () {
+      send({ type: 'play', videoId: items[0].videoId, title: items[0].title, thumb: items[0].thumb });
+      if (!rest.length) { setPlaylistStatus('1 lagu diputar dari playlist.'); return; }
+      rest.forEach(function (it, i) {
+        setTimeout(function () {
+          send({ type: 'queue_add', videoId: it.videoId, title: it.title, thumb: it.thumb });
+          if (i === rest.length - 1) {
+            setPlaylistStatus(items.length + ' lagu diputar dari playlist.');
+          }
+        }, i * 150);
+      });
+    }, 300);
   }
 
   /* ---------- Mic HP (v1.3.0) ---------- */
@@ -767,8 +803,12 @@
       add.title = 'Tambah ke antrean';
       add.onclick = function (ev) {
         ev.stopPropagation();
-        send({ type: 'queue_add', videoId: it.videoId, title: it.title, thumb: it.thumb });
-        setSearchStatus('Ditambahkan ke antrean: ' + it.title);
+        var added = addToSavedPlaylist(it);
+        if (wsOk) send({ type: 'queue_add', videoId: it.videoId, title: it.title, thumb: it.thumb });
+        setSearchStatus(added
+          ? (wsOk ? 'Ditambahkan ke antrean + playlist: ' : 'Disimpan ke playlist (TV belum terhubung): ') + it.title
+          : 'Sudah ada di playlist: ' + it.title);
+        renderPlaylist();
       };
       row.appendChild(img); row.appendChild(info); row.appendChild(add);
       row.onclick = function () {
@@ -800,15 +840,14 @@
     }
     var q = s.queue || [];
     liveQueue = q;
-    savePlaylistFromQueue(q); // v1.4.0: antrean otomatis tersimpan di HP
-    renderPlaylist(q);
+    renderPlaylist();
   }
 
   function initPhone() {
     $('phoneView').classList.remove('hidden');
     initTheme(); // tema Sistem/Gelap/Terang (v1.3.8)
     setConn(false, 'Menghubungkan ke TV…');
-    /* v1.4.0: dua tab kiri-kanan. Kiri = Cari, kanan = Playlist. */
+    /* v1.4.1: dua tab kiri-kanan. Kiri = Cari, kanan = Playlist. */
     var tabCari = $('tabCari'), tabPlaylist = $('tabPlaylist');
     var tabBtnCari = $('tabBtnCari'), tabBtnPlaylist = $('tabBtnPlaylist');
     function showTab(name) {
@@ -821,7 +860,7 @@
     if (tabBtnCari) tabBtnCari.onclick = function () { showTab('cari'); };
     if (tabBtnPlaylist) tabBtnPlaylist.onclick = function () { showTab('playlist'); };
     loadSavedPlaylist();
-    renderPlaylist(liveQueue);
+    renderPlaylist();
     $('btnDisconnect').onclick = disconnectTv;
     $('btnMic').onclick = toggleMic; // tombol mic HP (v1.3.0)
     /* slider volume mic: kirim langsung tiap geseran (tanpa debounce),
@@ -850,13 +889,13 @@
     /* Bersihkan = hapus antrean TV SEKALIGUS simpanan di HP. Kalau cuma
        antrean TV yang dibersihkan, simpanan lama akan muncul lagi. */
     $('btnClearQueue').onclick = function () { send({ type: 'queue_clear' }); clearSavedPlaylist(); };
-    /* v1.4.0: tombol Putar playlist + hapus simpanan. */
+    /* v1.4.1: tombol Putar playlist + hapus simpanan. */
     var playBtn = $('btnPlayPlaylist');
     if (playBtn) playBtn.onclick = playSavedPlaylist;
     var delBtn = $('btnDeleteSaved');
     if (delBtn) delBtn.onclick = function () {
       clearSavedPlaylist();
-      renderPlaylist(liveQueue);
+      renderPlaylist();
       setPlaylistStatus('Simpanan playlist dihapus. Antrean TV tidak berubah.');
     };
     /* ketuk bilah progres = loncat (seek) ke bagian lagu itu */
