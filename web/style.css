@@ -174,3 +174,25 @@ body.mode-phone.theme-light .update-progress-track { background: #e4e4e7; }
 body.mode-phone.theme-light .tab-btn { background: #fff; border: 1px solid #e4e4e7; color: #71717a; }
 body.mode-phone.theme-light .tab-btn.active { background: #16a34a; border-color: #16a34a; color: #fff; }
 body.mode-phone.theme-light .playlist-status { color: #71717a; }
+
+/* ============ Transpose file lokal (bukan rilis) ============ */
+.local-trial-title { font-size: 18px; font-weight: 800; }
+.local-trial-sub { font-size: 13px; color: #9a9a9a; line-height: 1.45; margin-top: 6px; }
+.local-trial-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.local-label { font-size: 14px; color: #c9c9c9; }
+.local-semi { font-size: 20px; font-weight: 800; min-width: 44px; text-align: center; color: #4ade80; }
+.local-status { font-size: 13px; color: #9a9a9a; margin-top: 10px; min-height: 16px; line-height: 1.4; }
+.local-song-sel { flex: 1; min-width: 0; padding: 12px; font-size: 15px; border-radius: 10px; border: 1px solid #2e2e2e; background: #1a1a1a; color: #fff; }
+.local-folder-info { flex: 1; min-width: 0; font-size: 13px; color: #9a9a9a; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; }
+.about-modal button:focus { outline: 3px solid #4ade80; outline-offset: 2px; }
+/* layar TV: semua serba besar */
+.mode-tv .local-trial-title { font-size: 4.2vh; }
+.mode-tv .local-trial-sub { font-size: 2.6vh; }
+.mode-tv .local-trial-row { gap: 1.2vw; margin-top: 1.6vh; }
+.mode-tv .local-label { font-size: 3vh; }
+.mode-tv .local-semi { font-size: 4.5vh; min-width: 6vw; }
+.mode-tv .local-status { font-size: 2.6vh; }
+.mode-tv .local-song-sel { font-size: 3vh; padding: 1.4vh 1vw; }
+.mode-tv .local-folder-info { font-size: 2.6vh; }
+.mode-tv .local-trial .btn { font-size: 3vh; padding: 1.4vh 1.6vw; }
+.mode-tv .local-trial .about-close { width: 100%; margin-top: 2vh; }

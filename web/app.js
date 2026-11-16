@@ -211,6 +211,167 @@
   var hadPhone = false;   // pernah ada HP terhubung sejak halaman dimuat
   var lastCode = '';      // kode pairing terakhir yang ditampilkan di layar tunggu
 
+  /* ---------- Transpose file lokal (bukan rilis) ----------
+     Musik lokal diputar native (MediaPlayer + PlaybackParams pitch),
+     BUKAN YouTube: lagu YouTube tidak bisa di-transpose (iframe
+     cross-origin, API-nya tidak punya kontrol pitch). Tempo tetap,
+     cuma nada yang berubah -6..+6 semitone. Mic HP tidak kena efek. */
+  var localSongs = [];        // [{id, title, source, isVideo}] dari Android.localList()
+  var localPlaying = false;
+  var localId = null, localTitle = '';
+  var localSemi = 0;          // semitone saat ini (-6..+6)
+  var LOCAL_MIN = -6, LOCAL_MAX = 6;
+  var localIsVideo = false;   // yang sedang diputar itu video atau audio
+  var localFolderName = '';   // nama folder pilihan user ('' = folder bawaan)
+  var localSongsRev = 0;      // naik tiap daftar lagu di-scan ulang
+  var localSongsSentRev = -1; // revisi daftar yang terakhir dikirim ke HP
+
+  function localBridge() {
+    try {
+      if (window.Android && window.Android.localPlay) return window.Android;
+    } catch (e) {}
+    return null;
+  }
+  function fmtSemi(n) { return (n > 0 ? '+' : '') + n; }
+  function clampSemi(n) {
+    n = parseInt(n, 10);
+    if (isNaN(n)) return 0;
+    return Math.max(LOCAL_MIN, Math.min(LOCAL_MAX, n));
+  }
+  function refreshLocalList() {
+    var b = localBridge();
+    if (!b) return;
+    try {
+      var arr = JSON.parse(b.localList() || '[]');
+      if (Array.isArray(arr)) { localSongs = arr; localSongsRev++; }
+    } catch (e) {}
+    var sel = $('localSongSel');
+    if (!sel) return;
+    sel.innerHTML = '';
+    localSongs.forEach(function (it) {
+      var o = document.createElement('option');
+      o.value = it.id;
+      o.textContent = it.title + (it.isVideo ? ' (video)' : '');
+      sel.appendChild(o);
+    });
+    if (!localSongs.length) {
+      var o2 = document.createElement('option');
+      o2.value = '';
+      o2.textContent = '(tidak ada lagu lokal)';
+      sel.appendChild(o2);
+    }
+    refreshLocalFolderInfo();
+  }
+  /* Info folder pilihan buat modal TV: nama folder + jumlah file.
+     Kalau izin folder hilang, infonya bilang supaya pilih ulang. */
+  function refreshLocalFolderInfo() {
+    var b = localBridge();
+    if (!b || !b.localFolderInfo) return;
+    try {
+      var info = JSON.parse(b.localFolderInfo() || '{}');
+      localFolderName = info.folder || '';
+      var el = $('localFolderInfo');
+      if (el) {
+        el.textContent = info.hasFolder
+          ? ('Folder: ' + (info.folder || '') + ' · ' + (info.count || 0) + ' file')
+          : ('Folder bawaan aplikasi · ' + (info.count || 0) + ' file');
+      }
+      if (info.folderLost) {
+        var st = $('localStatus');
+        if (st) st.textContent = 'Izin folder lama hilang, pilih folder lagi.';
+      }
+    } catch (e) {}
+  }
+  /* Buka pemilih folder sistem (SAF). Dipanggil tombol di modal TV.
+     Kalau TV ini tidak punya pemilih folder, pesannya bilang pakai
+     folder bawaan saja. */
+  function pickLocalFolder() {
+    var b = localBridge();
+    if (!b || !b.localPickFolder) return;
+    try {
+      var r = JSON.parse(b.localPickFolder() || '{}');
+      var st = $('localStatus');
+      if (!r.ok) {
+        if (st) st.textContent = 'TV ini tidak bisa memilih folder. Pakai folder music bawaan aplikasi.';
+      } else if (st) st.textContent = 'Pilih folder di layar TV…';
+    } catch (e) {}
+  }
+  /* Dipanggil native (MainActivity) begitu user selesai memilih folder:
+     daftar lagu di-scan ulang dari folder baru. */
+  window.__localFolderChanged = function () {
+    refreshLocalList();
+    updateLocalUi();
+    var st = $('localStatus');
+    if (st) st.textContent = 'Folder dipilih, daftar lagu diperbarui.';
+    broadcast();
+  };
+  function updateLocalUi() {
+    var v = $('localSemiVal'); if (v) v.textContent = fmtSemi(localSemi);
+    var vp = $('localSemiValP'); if (vp) vp.textContent = fmtSemi(localSemi);
+    var st = $('localStatus');
+    if (st) st.textContent = localPlaying
+      ? 'Memutar: ' + localTitle + ' · nada ' + fmtSemi(localSemi) + ' · loop'
+      : 'Berhenti · nada ' + fmtSemi(localSemi);
+    var stp = $('localStatusP');
+    if (stp) stp.textContent = localPlaying
+      ? 'Memutar di TV: ' + localTitle + ' · nada ' + fmtSemi(localSemi)
+      : 'Belum memutar · nada ' + fmtSemi(localSemi);
+    /* Tombol "Tampilkan video" cuma muncul saat video lokal diputar
+       dan layarnya sedang disembunyikan (diketuk). */
+    var sv = $('btnLocalShowVideo');
+    if (sv) sv.classList.toggle('hidden', !(localPlaying && localIsVideo));
+  }
+  function localSetSemi(n) {
+    n = clampSemi(n);
+    localSemi = n;
+    var b = localBridge();
+    if (b) { try { localSemi = b.localTranspose(n) | 0; } catch (e) {} }
+    updateLocalUi();
+    broadcast();
+  }
+  function stopLocal() {
+    var b = localBridge();
+    if (b) { try { b.localStop(); } catch (e) {} }
+    localPlaying = false; localId = null; localTitle = ''; localIsVideo = false;
+    updateLocalUi();
+  }
+  function playLocal(id) {
+    var b = localBridge();
+    if (!b) return;
+    /* lagu lokal = mode terpisah: matikan dulu player YouTube */
+    if (player && playerReady) { try { player.stopVideo(); } catch (e) {} }
+    playing = false;
+    var ok = false;
+    try { ok = !!b.localPlay(id); } catch (e) {}
+    if (!ok) {
+      var st = $('localStatus');
+      if (st) st.textContent = 'Gagal memutar file lokal.';
+      return;
+    }
+    localPlaying = true; localId = id;
+    localTitle = '';
+    localIsVideo = false;
+    for (var i = 0; i < localSongs.length; i++) {
+      if (localSongs[i].id === id) {
+        localTitle = localSongs[i].title;
+        localIsVideo = !!localSongs[i].isVideo;
+      }
+    }
+    try { b.localTranspose(localSemi); } catch (e) {}
+    updateLocalUi();
+    broadcast();
+  }
+  function openLocalModal() {
+    refreshLocalList();
+    updateLocalUi();
+    var m = $('localModal'); if (!m) return;
+    m.classList.remove('hidden');
+    var c = $('btnLocalClose'); if (c) c.focus();
+  }
+  function closeLocalModal() {
+    var m = $('localModal'); if (m) m.classList.add('hidden');
+  }
+
   function showTv(id) {
     $('waitScreen').classList.toggle('hidden', id !== 'wait');
     $('playerScreen').classList.toggle('hidden', id !== 'player');
@@ -227,6 +388,7 @@
     pendingVideo = null;
     current = null; playing = false; position = 0; duration = 0;
     queue = []; history = [];
+    if (localPlaying) stopLocal(); // Transpose: matikan pemutar lokal
     setMicBadge(false); // mic ikut mati saat sesi selesai
     showTv('wait');
     broadcast();
@@ -299,6 +461,8 @@
 
   function playNow(v) {
     if (current) history.push(current);
+    /* Transpose: lagu YouTube menggantikan pemutar lokal */
+    if (localPlaying) stopLocal();
     current = v;
     playing = true;
     loadVideo(v);
@@ -341,8 +505,18 @@
 
   function broadcast() {
     updateNowBar();
+    /* Daftar lagu lokal dikirim ke HP cuma kalau ada perubahan
+       (scan ulang / ganti folder), supaya broadcast tiap detik
+       tidak membawa daftar yang sama berulang-ulang. */
+    var includeSongs = localSongsRev !== localSongsSentRev;
+    if (includeSongs) localSongsSentRev = localSongsRev;
     send({ type: 'state', current: current, queue: queue, playing: playing,
-           position: position, duration: duration, volume: volume });
+           position: position, duration: duration, volume: volume,
+           /* Transpose: status pemutar lokal buat Remote */
+           local: { playing: localPlaying, id: localId, title: localTitle,
+                    semitones: localSemi, isVideo: localIsVideo,
+                    folder: localFolderName,
+                    songs: includeSongs ? localSongs.slice(0, 200) : undefined } });
   }
 
   function tvCommand(msg) {
@@ -377,6 +551,9 @@
           try { if (volume > 0) player.unMute(); } catch (e) {}
           try { player.setVolume(volume); } catch (e) {}
         }
+        /* Transpose: volume musik ikut ke pemutar lokal */
+        var lb = localBridge();
+        if (lb) { try { lb.localVolume(volume); } catch (e) {} }
         broadcast();
         break;
       case 'queue_remove':
@@ -385,6 +562,19 @@
         break;
       case 'queue_clear':
         queue = []; broadcast();
+        break;
+      /* ---------- Transpose file lokal (bukan rilis) ---------- */
+      case 'local_play':
+        if (msg.id) playLocal(msg.id);
+        break;
+      case 'local_stop':
+        if (localPlaying) { stopLocal(); broadcast(); }
+        break;
+      case 'transpose':
+        localSetSemi(msg.value);
+        break;
+      case 'transpose_delta':
+        localSetSemi(localSemi + (parseInt(msg.delta, 10) || 0));
         break;
       case 'get_state':
         broadcast();
@@ -400,6 +590,27 @@
     var ex1 = $('btnExitWait'); if (ex1) ex1.onclick = exitApp;
     var ex2 = $('btnExitPlayer'); if (ex2) ex2.onclick = exitApp;
     var ab = $('btnAboutWait'); if (ab) ab.onclick = openAbout;
+    /* Transpose file lokal: tombol + modal di layar tunggu dan
+       tombol kecil di bar bawah player. Di browser biasa (tanpa bridge
+       Android) tombolnya tetap ada tapi tidak memutar apa-apa. */
+    var lw = $('btnLocalWait'); if (lw) lw.onclick = openLocalModal;
+    var lp = $('btnLocalPlayer'); if (lp) lp.onclick = openLocalModal;
+    var lc = $('btnLocalClose'); if (lc) lc.onclick = closeLocalModal;
+    var lf = $('btnLocalFolder'); if (lf) lf.onclick = pickLocalFolder;
+    var lsv = $('btnLocalShowVideo');
+    if (lsv) lsv.onclick = function () {
+      var b = localBridge();
+      if (b && b.localShowVideo) { try { b.localShowVideo(); } catch (e) {} }
+    };
+    var lplay = $('btnLocalPlay');
+    if (lplay) lplay.onclick = function () {
+      var sel = $('localSongSel');
+      if (sel && sel.value) playLocal(sel.value);
+    };
+    var lstop = $('btnLocalStop'); if (lstop) lstop.onclick = function () { if (localPlaying) { stopLocal(); broadcast(); } };
+    var ldown = $('btnLocalDown'); if (ldown) ldown.onclick = function () { localSetSemi(localSemi - 1); };
+    var lup = $('btnLocalUp'); if (lup) lup.onclick = function () { localSetSemi(localSemi + 1); };
+    var lreset = $('btnLocalReset'); if (lreset) lreset.onclick = function () { localSetSemi(0); };
     var tv = $('tvVersion'); if (tv) tv.textContent = 'v' + installedName();
     checkForUpdate(false); // cek update tiap aplikasi dibuka
     /* polling /api/info tiap detik: tampilkan kode pairing terbaru +
@@ -841,6 +1052,40 @@
 
   function renderState(s) {
     lastState = s;
+    /* Transpose: panel file lokal di HP ikut status dari TV */
+    var loc = s.local || null;
+    if (loc) {
+      var vp = $('localSemiValP'); if (vp) vp.textContent = fmtSemi(loc.semitones);
+      var stp = $('localStatusP');
+      if (stp) stp.textContent = loc.playing
+        ? 'Memutar di TV: ' + (loc.title || '') + ' · nada ' + fmtSemi(loc.semitones) + (loc.isVideo ? ' · video' : '')
+        : 'Belum memutar · nada ' + fmtSemi(loc.semitones);
+      /* Daftar lagu datang dari TV cuma kalau ada perubahan (scan
+         ulang / ganti folder); pilihan user dipertahankan. */
+      if (loc.songs && Array.isArray(loc.songs)) {
+        var sel = $('localSongSelP');
+        if (sel) {
+          var prev = sel.value;
+          sel.innerHTML = '';
+          loc.songs.forEach(function (it) {
+            var o = document.createElement('option');
+            o.value = it.id;
+            o.textContent = it.title + (it.isVideo ? ' (video)' : '');
+            sel.appendChild(o);
+          });
+          if (!loc.songs.length) {
+            var o2 = document.createElement('option');
+            o2.value = '';
+            o2.textContent = '(tidak ada lagu lokal)';
+            sel.appendChild(o2);
+          } else if (prev) sel.value = prev;
+        }
+      }
+      if (typeof loc.folder === 'string') {
+        var fi = $('localFolderInfoP');
+        if (fi) fi.textContent = loc.folder ? ('Folder: ' + loc.folder) : 'Folder bawaan aplikasi';
+      }
+    }
     var card = $('npCard');
     if (s.current) {
       card.classList.remove('hidden');
@@ -903,6 +1148,18 @@
       if (!lastState || !lastState.current) return;
       send({ type: lastState.playing ? 'pause' : 'resume' });
     };
+    /* Transpose file lokal: panel di HP kirim perintah ke TV.
+       Putar = lagu yang dipilih di daftar (contoh kalau kosong). */
+    var lpp = $('btnLocalPlayP');
+    if (lpp) lpp.onclick = function () {
+      var sel = $('localSongSelP');
+      var id = (sel && sel.value) || 'sample';
+      send({ type: 'local_play', id: id });
+    };
+    var lsp = $('btnLocalStopP'); if (lsp) lsp.onclick = function () { send({ type: 'local_stop' }); };
+    var ldp = $('btnLocalDownP'); if (ldp) ldp.onclick = function () { send({ type: 'transpose_delta', delta: -1 }); };
+    var lup2 = $('btnLocalUpP'); if (lup2) lup2.onclick = function () { send({ type: 'transpose_delta', delta: 1 }); };
+    var lrp = $('btnLocalResetP'); if (lrp) lrp.onclick = function () { send({ type: 'transpose', value: 0 }); };
     $('btnNext').onclick = function () { send({ type: 'next' }); };
     $('btnPrev').onclick = function () { send({ type: 'prev' }); };
     $('btnReplay').onclick = function () { send({ type: 'replay' }); };

@@ -20,6 +20,8 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -110,11 +112,44 @@ public class MainActivity extends Activity {
     private long installLaunchedId = -1;
     private BroadcastReceiver downloadReceiver;
 
+    /** Transpose file lokal: pemutar file lokal + pitch shift.
+        Dibuat di onCreate, dilepas di onDestroy. */
+    private LocalPlayer localPlayer;
+
+    /** Pemilih folder lagu (SAF ACTION_OPEN_DOCUMENT_TREE). */
+    private static final int REQ_PICK_FOLDER = 9001;
+
+    /** Layar video file lokal: SurfaceView fullscreen di atas WebView.
+        Muncul cuma saat video lokal diputar; ketuk video untuk
+        menyembunyikannya (audio tetap jalan), tombol "Tampilkan video"
+        di modal File Lokal memunculkannya lagi. */
+    private FrameLayout videoLayer;
+    private SurfaceView videoSurface;
+    private boolean videoSurfaceReady = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         mainHandler = new Handler(Looper.getMainLooper());
+        localPlayer = new LocalPlayer(this); // Transpose file lokal
+        localPlayer.setVideoListener(new LocalPlayer.VideoListener() {
+            @Override public void onVideoStarted(final int w, final int h) {
+                mainHandler.post(new Runnable() {
+                    @Override public void run() { showVideoLayer(w, h); }
+                });
+            }
+            @Override public void onVideoStopped() {
+                mainHandler.post(new Runnable() {
+                    @Override public void run() { hideVideoLayer(); }
+                });
+            }
+            @Override public void onVideoSizeChanged(final int w, final int h) {
+                mainHandler.post(new Runnable() {
+                    @Override public void run() { sizeVideoSurface(w, h); }
+                });
+            }
+        });
 
         Intent svc = new Intent(this, KaraokeService.class);
         /* v1.4.2: kalau service sudah jalan dari sebelum activity ini
@@ -163,6 +198,34 @@ public class MainActivity extends Activity {
         nativeView = buildNativeWaitView();
         root.addView(nativeView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Layar video file lokal: di atas segalanya, sembunyi sampai
+        // ada video yang diputar. Ketuk video = sembunyikan layarnya
+        // (audio tetap jalan); muncul lagi lewat tombol di modal.
+        videoLayer = new FrameLayout(this);
+        videoLayer.setBackgroundColor(Color.BLACK);
+        videoLayer.setVisibility(View.GONE);
+        videoSurface = new SurfaceView(this);
+        videoSurface.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { hideVideoLayer(); }
+        });
+        videoLayer.addView(videoSurface, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
+        videoSurface.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder holder) {
+                videoSurfaceReady = true;
+                if (localPlayer != null) localPlayer.onSurfaceReady();
+            }
+            @Override public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {}
+            @Override public void surfaceDestroyed(SurfaceHolder holder) {
+                videoSurfaceReady = false;
+            }
+        });
+        root.addView(videoLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        localPlayer.setSurfaceHolder(videoSurface.getHolder());
+
         setContentView(root);
 
         // Download update selesai -> buka installer sistem.
@@ -402,6 +465,70 @@ public class MainActivity extends Activity {
         if (nativeView != null) nativeView.setVisibility(View.GONE);
     }
 
+    /** Tampilkan layar video file lokal (dipanggil saat video mulai). */
+    private void showVideoLayer(int vw, int vh) {
+        if (destroyed || videoLayer == null) return;
+        videoLayer.setVisibility(View.VISIBLE);
+        sizeVideoSurface(vw, vh);
+    }
+
+    /** Ukur SurfaceView mengikuti rasio video (muat di layar, tengah).
+        Kalau ukuran video belum diketahui, pakai fullscreen. */
+    private void sizeVideoSurface(int vw, int vh) {
+        if (videoSurface == null || videoLayer == null) return;
+        FrameLayout.LayoutParams lp;
+        if (vw > 0 && vh > 0) {
+            int sw = getResources().getDisplayMetrics().widthPixels;
+            int sh = getResources().getDisplayMetrics().heightPixels;
+            float scale = Math.min((float) sw / vw, (float) sh / vh);
+            lp = new FrameLayout.LayoutParams(
+                    Math.round(vw * scale), Math.round(vh * scale), Gravity.CENTER);
+        } else {
+            lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.CENTER);
+        }
+        videoSurface.setLayoutParams(lp);
+    }
+
+    /** Sembunyikan layar video (audio tetap jalan). */
+    private void hideVideoLayer() {
+        if (videoLayer != null) videoLayer.setVisibility(View.GONE);
+    }
+
+    /** Hasil pemilih folder (SAF): simpan URI persisten, kabari halaman
+        web supaya daftar lagu di-scan ulang. */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_PICK_FOLDER && resultCode == RESULT_OK
+                && data != null && data.getData() != null) {
+            Uri treeUri = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception e) {
+                // Izin persisten gagal: akses mungkin cuma berlaku sesi ini.
+            }
+            if (localPlayer != null) localPlayer.setFolderUri(treeUri);
+            notifyJsLocalFolderChanged();
+        }
+    }
+
+    /** Kabari halaman web kalau folder pilihan berubah. */
+    private void notifyJsLocalFolderChanged() {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!destroyed && webView != null) {
+                    try {
+                        webView.evaluateJavascript(
+                                "window.__localFolderChanged && window.__localFolderChanged()", null);
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
+
     private static String httpGet(String url) {
         HttpURLConnection c = null;
         try {
@@ -478,6 +605,101 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getVersionName() {
             return getAppVersionName();
+        }
+
+        /* ---------- Transpose file lokal ----------
+           Dipanggil halaman web (mode TV). Musik lokal diputar lewat
+           MediaPlayer + PlaybackParams.setPitch: nada berubah, tempo
+           tetap. Mic HP TIDAK kena efek (jalur AudioTrack terpisah). */
+        @JavascriptInterface
+        public String localList() {
+            return localPlayer != null ? localPlayer.listJson() : "[]";
+        }
+
+        @JavascriptInterface
+        public boolean localPlay(final String id) {
+            return localPlayer != null && localPlayer.play(id);
+        }
+
+        @JavascriptInterface
+        public void localStop() {
+            if (localPlayer != null) localPlayer.stop();
+        }
+
+        /** Ubah transpose (-6..+6). Mengembalikan nilai yang diterapkan. */
+        @JavascriptInterface
+        public int localTranspose(final int n) {
+            return localPlayer != null ? localPlayer.setTranspose(n) : 0;
+        }
+
+        @JavascriptInterface
+        public String localState() {
+            return localPlayer != null ? localPlayer.stateJson()
+                    : "{\"playing\":false,\"semitones\":0}";
+        }
+
+        /** Volume musik (0-100) juga berlaku buat pemutar lokal. */
+        @JavascriptInterface
+        public void localVolume(final int v) {
+            if (localPlayer != null) localPlayer.setVolume(v);
+        }
+
+        /** Buka pemilih folder sistem (SAF) buat folder lagu/video.
+            Mengembalikan JSON: {"ok":true} kalau picker dibuka,
+            {"ok":false,"reason":"no_picker"} kalau TV ini tidak punya
+            pemilih folder (fallback: folder music bawaan aplikasi).
+            Izin diminta saat tombol ditekan, bukan saat aplikasi dibuka.
+            Hasilnya sampai lewat onActivityResult. */
+        @JavascriptInterface
+        public String localPickFolder() {
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                if (i.resolveActivity(getPackageManager()) == null) {
+                    return "{\"ok\":false,\"reason\":\"no_picker\"}";
+                }
+                mainHandler.post(new Runnable() {
+                    @Override public void run() {
+                        if (!destroyed) {
+                            try { startActivityForResult(i, REQ_PICK_FOLDER); }
+                            catch (Exception e) { /* picker gagal dibuka */ }
+                        }
+                    }
+                });
+                return "{\"ok\":true}";
+            } catch (Exception e) {
+                return "{\"ok\":false,\"reason\":\"error\"}";
+            }
+        }
+
+        /** Info folder lokal buat modal: nama folder pilihan + jumlah
+            file + apakah picker tersedia di TV ini. */
+        @JavascriptInterface
+        public String localFolderInfo() {
+            boolean picker = false;
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                picker = i.resolveActivity(getPackageManager()) != null;
+            } catch (Exception ignored) {}
+            String base = localPlayer != null ? localPlayer.folderInfoJson() : "{}";
+            try {
+                JSONObject o = new JSONObject(base);
+                o.put("picker", picker);
+                return o.toString();
+            } catch (Exception e) {
+                return "{\"picker\":" + picker + "}";
+            }
+        }
+
+        /** Tampilkan lagi layar video yang sempat disembunyikan. */
+        @JavascriptInterface
+        public void localShowVideo() {
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!destroyed && localPlayer != null) localPlayer.showVideo();
+                }
+            });
         }
 
         /** Boleh install dari sumber tak dikenal? (Android 8+: toggle di Pengaturan) */
@@ -668,6 +890,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (localPlayer != null) { try { localPlayer.destroy(); } catch (Exception ignored) {} }
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception e) {}
             downloadReceiver = null;

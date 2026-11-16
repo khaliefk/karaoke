@@ -23,6 +23,7 @@
     <div id="waitIp" class="wait-ip"></div>
     <div class="wait-version" id="tvVersion">v1.4.2</div>
     <div class="wait-actions">
+      <button id="btnLocalWait" class="btn ghost-tv">🎵 File Lokal</button>
       <button id="btnAboutWait" class="btn ghost-tv">About</button>
       <button id="btnExitWait" class="btn exit-btn">✕ Keluar</button>
     </div>
@@ -35,8 +36,41 @@
         <div id="nowTitle" class="now-title"></div>
         <div id="nextTitle" class="now-next"></div>
       </div>
+      <button id="btnLocalPlayer" class="btn small">🎵 Nada</button>
       <button id="btnExitPlayer" class="btn small danger-outline">Keluar</button>
     </div>
+  </div>
+</div>
+
+<!-- ============ Transpose file lokal (bukan rilis) ============ -->
+<div id="localModal" class="about-modal hidden">
+  <div class="about-card local-trial">
+    <div class="local-trial-title">🎵 File Lokal — Transpose</div>
+    <p class="local-trial-sub">Ubah nada lagu/video file lokal per semitone, tempo tetap.
+      Audio: MP3, M4A, OGG, WAV, FLAC, AAC. Video: MP4, MKV, WEBM, 3GP.
+      Cuma buat file lokal — lagu YouTube tidak bisa di-transpose. Mic HP
+      tidak kena efek.</p>
+    <div class="local-trial-row">
+      <button id="btnLocalFolder" class="btn">📁 Pilih folder</button>
+      <span id="localFolderInfo" class="local-folder-info"></span>
+    </div>
+    <div class="local-trial-row">
+      <select id="localSongSel" class="local-song-sel"></select>
+    </div>
+    <div class="local-trial-row">
+      <button id="btnLocalPlay" class="btn primary">▶ Putar</button>
+      <button id="btnLocalStop" class="btn">■ Stop</button>
+      <button id="btnLocalShowVideo" class="btn hidden">📺 Tampilkan video</button>
+    </div>
+    <div class="local-trial-row">
+      <span class="local-label">Nada:</span>
+      <button id="btnLocalDown" class="btn ctrl">−</button>
+      <span id="localSemiVal" class="local-semi">0</span>
+      <button id="btnLocalUp" class="btn ctrl">+</button>
+      <button id="btnLocalReset" class="btn">Reset 0</button>
+    </div>
+    <div id="localStatus" class="local-status"></div>
+    <button id="btnLocalClose" class="btn primary about-close">Tutup</button>
   </div>
 </div>
 
@@ -64,6 +98,30 @@
       <span id="micVolVal">50</span>
     </div>
     <div id="micStatus" class="mic-status"></div>
+  </section>
+
+  <!-- Transpose file lokal (bukan rilis): putar lagu/video lokal
+       di TV, ubah nadanya dari HP. Daftar lagu datang dari TV
+       (folder pilihan + folder bawaan). Lagu YouTube tidak bisa
+       di-transpose. -->
+  <section class="np-card">
+    <div class="np-label">🎵 FILE LOKAL — TRANSPOSE</div>
+    <div class="local-trial-row">
+      <select id="localSongSelP" class="local-song-sel"></select>
+    </div>
+    <div class="local-trial-row">
+      <button id="btnLocalPlayP" class="btn primary">▶ Putar</button>
+      <button id="btnLocalStopP" class="btn">■ Stop</button>
+    </div>
+    <div class="local-trial-row">
+      <span class="local-label">Nada:</span>
+      <button id="btnLocalDownP" class="btn ctrl">−</button>
+      <span id="localSemiValP" class="local-semi">0</span>
+      <button id="btnLocalUpP" class="btn ctrl">+</button>
+      <button id="btnLocalResetP" class="btn">Reset 0</button>
+    </div>
+    <div id="localFolderInfoP" class="local-status"></div>
+    <div id="localStatusP" class="local-status"></div>
   </section>
 
   <!-- v1.4.1: dua tab kiri-kanan. Kiri = Cari (pencarian + sedang
