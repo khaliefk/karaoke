@@ -51,15 +51,12 @@
       Cuma buat file lokal — lagu YouTube tidak bisa di-transpose. Mic HP
       tidak kena efek.</p>
     <div class="local-trial-row">
-      <button id="btnLocalFolder" class="btn">📁 Pilih folder</button>
-      <span id="localFolderInfo" class="local-folder-info"></span>
-    </div>
-    <div class="local-trial-row">
       <select id="localSongSel" class="local-song-sel"></select>
     </div>
     <div class="local-trial-row">
       <button id="btnLocalPlay" class="btn primary">▶ Putar</button>
       <button id="btnLocalStop" class="btn">■ Stop</button>
+      <button id="btnLocalDelete" class="btn danger">🗑 Hapus</button>
       <button id="btnLocalShowVideo" class="btn hidden">📺 Tampilkan video</button>
     </div>
     <div class="local-trial-row">
@@ -69,6 +66,13 @@
       <button id="btnLocalUp" class="btn ctrl">+</button>
       <button id="btnLocalReset" class="btn">Reset 0</button>
     </div>
+    <!-- Progres unduhan (diperintah dari HP, dikerjakan TV): bar +
+         persen + MB, update live selama unduhan jalan. -->
+    <div id="localDownloadProgress" class="update-progress hidden">
+      <div class="update-progress-track"><div id="localDownloadProgressBar" class="update-progress-bar"></div></div>
+      <div id="localDownloadProgressText" class="update-progress-text"></div>
+    </div>
+    <div id="localDownloadStatus" class="local-status"></div>
     <div id="localStatus" class="local-status"></div>
     <button id="btnLocalClose" class="btn primary about-close">Tutup</button>
   </div>
@@ -106,13 +110,7 @@
        di-transpose. -->
   <section class="np-card">
     <div class="np-label">🎵 FILE LOKAL — TRANSPOSE</div>
-    <div class="local-trial-row">
-      <select id="localSongSelP" class="local-song-sel"></select>
-    </div>
-    <div class="local-trial-row">
-      <button id="btnLocalPlayP" class="btn primary">▶ Putar</button>
-      <button id="btnLocalStopP" class="btn">■ Stop</button>
-    </div>
+    <div id="localNowTitleP" class="local-now-title">Belum ada lagu lokal yang diputar</div>
     <div class="local-trial-row">
       <span class="local-label">Nada:</span>
       <button id="btnLocalDownP" class="btn ctrl">−</button>
@@ -129,6 +127,7 @@
   <nav class="phone-tabs">
     <button id="tabBtnCari" class="tab-btn active">🔍 Cari</button>
     <button id="tabBtnPlaylist" class="tab-btn">🎵 Playlist (<span id="tabPlaylistCount">0</span>)</button>
+    <button id="tabBtnDownload" class="tab-btn">⬇ Download (<span id="tabDownloadCount">0</span>)</button>
   </nav>
 
   <div id="tabCari">
@@ -173,6 +172,22 @@
     <div id="queueList" class="queue-list"></div>
   </section>
   <button id="btnDeleteSaved" class="btn ghost small danger-outline">Hapus simpanan playlist</button>
+  </div>
+
+  <div id="tabDownload" class="hidden">
+  <!-- Unduhan MP4 ke TV: daftar dibaca dari folder download TV
+       (bukan dari memori HP), jadi tetap ada walau HP sempat putus.
+       Ketuk file untuk memutar lokal di TV (transpose tetap jalan). -->
+  <div id="downloadStatus" class="playlist-status"></div>
+  <div id="downloadProgress" class="update-progress hidden">
+    <div class="update-progress-track"><div id="downloadProgressBar" class="update-progress-bar"></div></div>
+    <div id="downloadProgressText" class="update-progress-text"></div>
+  </div>
+  <section class="queue-sec">
+    <div class="queue-head"><span>Download (<span id="downloadCount">0</span>)</span></div>
+    <div id="downloadList" class="queue-list"></div>
+  </section>
+  <div class="playlist-status">File tersimpan di TV. Ketuk ⬇ di hasil pencarian buat mengunduh video ke TV. Ketuk 🗑 di file buat menghapusnya.</div>
   </div>
 
   <button id="btnRescan" class="btn ghost hidden" onclick="rescanQr()">Scan Ulang QR TV</button>
@@ -232,6 +247,6 @@
   </div>
 </div>
 
-<script src="app.js?v=1.4.2"></script>
+<script src="app.js?v=1.4.7"></script>
 </body>
 </html>

@@ -116,8 +116,20 @@ public class MainActivity extends Activity {
         Dibuat di onCreate, dilepas di onDestroy. */
     private LocalPlayer localPlayer;
 
+    /** Unduh video karaoke ke TV (MP4) atas perintah dari HP.
+        Jalan di thread background milik TV, jadi HP putus di tengah
+        jalan tidak menghentikannya; progresnya dilaporkan ke halaman
+        web (terus ke HP lewat broadcast). Dibuat di onCreate,
+        dilepas di onDestroy. Kalau aplikasi restart di tengah
+        unduhan, VideoDownloader melanjutkan sendiri dari catatan
+        progres yang tersimpan. */
+    private VideoDownloader videoDownloader;
+
     /** Pemilih folder lagu (SAF ACTION_OPEN_DOCUMENT_TREE). */
     private static final int REQ_PICK_FOLDER = 9001;
+
+    /** Minta izin baca media (fallback cari file di TV). */
+    private static final int REQ_MEDIA_PERM = 9002;
 
     /** Layar video file lokal: SurfaceView fullscreen di atas WebView.
         Muncul cuma saat video lokal diputar; ketuk video untuk
@@ -133,6 +145,11 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         mainHandler = new Handler(Looper.getMainLooper());
         localPlayer = new LocalPlayer(this); // Transpose file lokal
+        videoDownloader = new VideoDownloader(this, new VideoDownloader.Listener() {
+            @Override public void onDownloadProgress(String stateJson) {
+                notifyJsDownloadProgress(stateJson);
+            }
+        });
         localPlayer.setVideoListener(new LocalPlayer.VideoListener() {
             @Override public void onVideoStarted(final int w, final int h) {
                 mainHandler.post(new Runnable() {
@@ -497,12 +514,14 @@ public class MainActivity extends Activity {
     }
 
     /** Hasil pemilih folder (SAF): simpan URI persisten, kabari halaman
-        web supaya daftar lagu di-scan ulang. */
+        web supaya daftar lagu di-scan ulang. Kalau user membatalkan,
+        halaman web juga dikabari supaya status tidak nyangkut di
+        "Pilih folder di layar TV..." selamanya. */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_PICK_FOLDER && resultCode == RESULT_OK
-                && data != null && data.getData() != null) {
+        if (requestCode != REQ_PICK_FOLDER) return;
+        if (resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri treeUri = data.getData();
             try {
                 getContentResolver().takePersistableUriPermission(treeUri,
@@ -511,8 +530,74 @@ public class MainActivity extends Activity {
                 // Izin persisten gagal: akses mungkin cuma berlaku sesi ini.
             }
             if (localPlayer != null) localPlayer.setFolderUri(treeUri);
+            notifyJsPickerResult(true, "");
             notifyJsLocalFolderChanged();
+        } else {
+            notifyJsPickerResult(false, "cancelled");
         }
+    }
+
+    /** Hasil minta izin baca media: kabari halaman web supaya bisa
+        lanjut scan atau menampilkan tombol Pengaturan. */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_MEDIA_PERM) return;
+        boolean granted = grantResults != null && grantResults.length > 0;
+        if (granted) {
+            for (int g : grantResults) {
+                if (g != PackageManager.PERMISSION_GRANTED) { granted = false; break; }
+            }
+        }
+        notifyJsPermResult(granted);
+    }
+
+    /** Kabari halaman web soal hasil buka pemilih folder. */
+    private void notifyJsPickerResult(final boolean ok, final String reason) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!destroyed && webView != null) {
+                    try {
+                        webView.evaluateJavascript(
+                                "window.__localPickerResult && window.__localPickerResult("
+                                        + ok + ",'" + reason + "')", null);
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
+
+    /** Kabari halaman web soal hasil minta izin baca media. */
+    private void notifyJsPermResult(final boolean granted) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!destroyed && webView != null) {
+                    try {
+                        webView.evaluateJavascript(
+                                "window.__localPermResult && window.__localPermResult("
+                                        + granted + ")", null);
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
+
+    /** Kabari halaman web soal progres unduhan (tiap perubahan
+        progres + saat selesai/gagal). Halaman TV yang teruskan ke
+        HP lewat broadcast state. */
+    private void notifyJsDownloadProgress(final String stateJson) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!destroyed && webView != null) {
+                    try {
+                        webView.evaluateJavascript(
+                                "window.__downloadProgress && window.__downloadProgress("
+                                        + stateJson + ")", null);
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
     }
 
     /** Kabari halaman web kalau folder pilihan berubah. */
@@ -616,6 +701,16 @@ public class MainActivity extends Activity {
             return localPlayer != null ? localPlayer.listJson() : "[]";
         }
 
+        /** Daftar lagu segar (bypass cache scan 10 detik): dipakai
+            saat Remote baru sambung (get_state), supaya daftar
+            unduhan dibaca ulang dari folder, bukan dari ingatan. */
+        @JavascriptInterface
+        public String localRefreshList() {
+            if (localPlayer == null) return "[]";
+            localPlayer.invalidateScan();
+            return localPlayer.listJson();
+        }
+
         @JavascriptInterface
         public boolean localPlay(final String id) {
             return localPlayer != null && localPlayer.play(id);
@@ -647,9 +742,12 @@ public class MainActivity extends Activity {
         /** Buka pemilih folder sistem (SAF) buat folder lagu/video.
             Mengembalikan JSON: {"ok":true} kalau picker dibuka,
             {"ok":false,"reason":"no_picker"} kalau TV ini tidak punya
-            pemilih folder (fallback: folder music bawaan aplikasi).
-            Izin diminta saat tombol ditekan, bukan saat aplikasi dibuka.
-            Hasilnya sampai lewat onActivityResult. */
+            pemilih folder (fallback: cari file di TV / folder music
+            bawaan aplikasi). Izin diminta saat tombol ditekan, bukan
+            saat aplikasi dibuka. Hasilnya sampai lewat onActivityResult
+            (sukses -> __localFolderChanged, batal -> __localPickerResult)
+            atau __localPickerResult kalau picker gagal dibuka - jadi
+            tombol tidak pernah diam tanpa kabar. */
         @JavascriptInterface
         public String localPickFolder() {
             try {
@@ -663,7 +761,7 @@ public class MainActivity extends Activity {
                     @Override public void run() {
                         if (!destroyed) {
                             try { startActivityForResult(i, REQ_PICK_FOLDER); }
-                            catch (Exception e) { /* picker gagal dibuka */ }
+                            catch (Exception e) { notifyJsPickerResult(false, "launch_failed"); }
                         }
                     }
                 });
@@ -671,6 +769,90 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 return "{\"ok\":false,\"reason\":\"error\"}";
             }
+        }
+
+        /** Keadaan folder lokal + izin media + ketersediaan picker,
+            buat modal memutuskan tampilan fallback. */
+        @JavascriptInterface
+        public String localMediaState() {
+            boolean picker = false;
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                picker = i.resolveActivity(getPackageManager()) != null;
+            } catch (Exception ignored) {}
+            String perm = localPlayer != null ? localPlayer.mediaPermState() : "denied";
+            String base = localPlayer != null ? localPlayer.folderInfoJson() : "{}";
+            try {
+                JSONObject o = new JSONObject(base);
+                o.put("picker", picker);
+                o.put("perm", perm);
+                return o.toString();
+            } catch (Exception e) {
+                return "{\"picker\":" + picker + ",\"perm\":\"" + perm + "\"}";
+            }
+        }
+
+        /** Minta izin baca media (dipakai fallback cari file di TV).
+            Kalau sudah diizinkan: {"ok":true,"granted":true}. Kalau
+            belum: dialog izin sistem dibuka, hasilnya sampai lewat
+            __localPermResult. */
+        @JavascriptInterface
+        public String localRequestMediaPermission() {
+            if (localPlayer != null
+                    && "granted".equals(localPlayer.mediaPermState())) {
+                return "{\"ok\":true,\"granted\":true}";
+            }
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!destroyed) {
+                        try {
+                            requestPermissions(LocalPlayer.neededMediaPerms(), REQ_MEDIA_PERM);
+                        } catch (Exception e) {
+                            notifyJsPermResult(false);
+                        }
+                    }
+                }
+            });
+            return "{\"ok\":true,\"granted\":false,\"requested\":true}";
+        }
+
+        /** Daftar folder perangkat berisi file media (MediaStore).
+            Dipakai fallback kalau TV tidak punya pemilih folder. */
+        @JavascriptInterface
+        public String localScanDeviceFolders() {
+            return localPlayer != null ? localPlayer.scanDeviceFoldersJson()
+                    : "{\"ok\":false,\"reason\":\"error\"}";
+        }
+
+        /** Pakai satu folder perangkat (hasil scan MediaStore) sebagai
+            folder lagu. Mengembalikan {"ok":true} + daftar di-scan
+            ulang; halaman web dikabari lewat __localFolderChanged. */
+        @JavascriptInterface
+        public String localUseMediaFolder(final String path) {
+            if (localPlayer == null || path == null || path.length() == 0) {
+                return "{\"ok\":false,\"reason\":\"empty\"}";
+            }
+            localPlayer.setMediaFolder(path);
+            notifyJsLocalFolderChanged();
+            return "{\"ok\":true}";
+        }
+
+        /** Buka halaman Izin aplikasi ini di Pengaturan (buat user yang
+            menolak izin media lalu berubah pikiran). */
+        @JavascriptInterface
+        public void localOpenAppSettings() {
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!destroyed) {
+                        try {
+                            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:" + getPackageName()));
+                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(i);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
         }
 
         /** Info folder lokal buat modal: nama folder pilihan + jumlah
@@ -700,6 +882,37 @@ public class MainActivity extends Activity {
                     if (!destroyed && localPlayer != null) localPlayer.showVideo();
                 }
             });
+        }
+
+        /* ---------- Unduh video ke TV (MP4) ----------
+           HP cuma memerintah lewat WebSocket; resolve stream +
+           unduh dikerjakan TV sendiri di thread background
+           (VideoDownloader). Progres dilaporkan ke halaman web
+           lewat __downloadProgress, dan halaman web yang teruskan
+           ke HP lewat broadcast state. */
+        @JavascriptInterface
+        public String localDownload(final String videoId, final String title) {
+            return videoDownloader != null ? videoDownloader.start(videoId, title)
+                    : "{\"ok\":false,\"reason\":\"error\"}";
+        }
+
+        /** State unduhan sekarang (dipakai halaman web buat sinkron
+            ulang saat Remote sambung lagi): {"state":"idle|
+            downloading|done|failed","videoId","title","file",
+            "downloaded","total","error","message"}. */
+        @JavascriptInterface
+        public String localDownloadState() {
+            return videoDownloader != null ? videoDownloader.stateJson()
+                    : "{\"state\":\"idle\"}";
+        }
+
+        /** Hapus satu file unduhan ("download:<nama>") dari TV.
+            Dipanggil halaman web TV (modal File Lokal) dan perintah
+            'delete_download' dari HP. */
+        @JavascriptInterface
+        public String localDeleteDownload(final String id) {
+            boolean ok = localPlayer != null && localPlayer.deleteDownload(id);
+            return ok ? "{\"ok\":true}" : "{\"ok\":false}";
         }
 
         /** Boleh install dari sumber tak dikenal? (Android 8+: toggle di Pengaturan) */
@@ -890,6 +1103,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (videoDownloader != null) { try { videoDownloader.destroy(); } catch (Exception ignored) {} }
         if (localPlayer != null) { try { localPlayer.destroy(); } catch (Exception ignored) {} }
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception e) {}

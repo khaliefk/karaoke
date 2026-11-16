@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.4.2';
+  var APP_VERSION = '1.4.7';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -18,6 +18,14 @@
     sec = Math.max(0, Math.floor(sec || 0));
     var m = Math.floor(sec / 60), s = sec % 60;
     return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+  /* Ukuran file buat tab Download + progres unduhan. */
+  function fmtSize(bytes) {
+    bytes = parseInt(bytes, 10);
+    if (isNaN(bytes) || bytes < 0) bytes = 0;
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
   }
 
   /* ---------- Tema tampilan Remote (v1.3.8, mode HP saja) ----------
@@ -238,12 +246,18 @@
     if (isNaN(n)) return 0;
     return Math.max(LOCAL_MIN, Math.min(LOCAL_MAX, n));
   }
-  function refreshLocalList() {
+  function refreshLocalList(force) {
     var b = localBridge();
     if (!b) return;
     try {
-      var arr = JSON.parse(b.localList() || '[]');
-      if (Array.isArray(arr)) { localSongs = arr; localSongsRev++; }
+      var raw = (force && b.localRefreshList) ? b.localRefreshList() : b.localList();
+      var arr = JSON.parse(raw || '[]');
+      /* v1.4.7: penjelajah folder ditutup — daftar lagu modal TV
+         cuma dari folder unduhan, tanpa pilih folder. */
+      if (Array.isArray(arr)) {
+        localSongs = arr.filter(function (it) { return it.source === 'download'; });
+        localSongsRev++;
+      }
     } catch (e) {}
     var sel = $('localSongSel');
     if (!sel) return;
@@ -262,49 +276,17 @@
     }
     refreshLocalFolderInfo();
   }
-  /* Info folder pilihan buat modal TV: nama folder + jumlah file.
-     Kalau izin folder hilang, infonya bilang supaya pilih ulang. */
+  /* Nama folder buat broadcast ke HP. v1.4.7: folder pilihan sudah
+     tidak ada lagi (daftar lagu cuma dari folder unduhan), jadi
+     namanya hampir selalu kosong. */
   function refreshLocalFolderInfo() {
     var b = localBridge();
     if (!b || !b.localFolderInfo) return;
     try {
       var info = JSON.parse(b.localFolderInfo() || '{}');
-      localFolderName = info.folder || '';
-      var el = $('localFolderInfo');
-      if (el) {
-        el.textContent = info.hasFolder
-          ? ('Folder: ' + (info.folder || '') + ' · ' + (info.count || 0) + ' file')
-          : ('Folder bawaan aplikasi · ' + (info.count || 0) + ' file');
-      }
-      if (info.folderLost) {
-        var st = $('localStatus');
-        if (st) st.textContent = 'Izin folder lama hilang, pilih folder lagi.';
-      }
+      localFolderName = info.folder || info.mediaFolder || '';
     } catch (e) {}
   }
-  /* Buka pemilih folder sistem (SAF). Dipanggil tombol di modal TV.
-     Kalau TV ini tidak punya pemilih folder, pesannya bilang pakai
-     folder bawaan saja. */
-  function pickLocalFolder() {
-    var b = localBridge();
-    if (!b || !b.localPickFolder) return;
-    try {
-      var r = JSON.parse(b.localPickFolder() || '{}');
-      var st = $('localStatus');
-      if (!r.ok) {
-        if (st) st.textContent = 'TV ini tidak bisa memilih folder. Pakai folder music bawaan aplikasi.';
-      } else if (st) st.textContent = 'Pilih folder di layar TV…';
-    } catch (e) {}
-  }
-  /* Dipanggil native (MainActivity) begitu user selesai memilih folder:
-     daftar lagu di-scan ulang dari folder baru. */
-  window.__localFolderChanged = function () {
-    refreshLocalList();
-    updateLocalUi();
-    var st = $('localStatus');
-    if (st) st.textContent = 'Folder dipilih, daftar lagu diperbarui.';
-    broadcast();
-  };
   function updateLocalUi() {
     var v = $('localSemiVal'); if (v) v.textContent = fmtSemi(localSemi);
     var vp = $('localSemiValP'); if (vp) vp.textContent = fmtSemi(localSemi);
@@ -335,6 +317,50 @@
     localPlaying = false; localId = null; localTitle = ''; localIsVideo = false;
     updateLocalUi();
   }
+  /* Hapus file unduhan yang dipilih di modal TV. Dua ketuk: ketuk
+     pertama bersiap (tombol berubah), ketuk kedua dalam 5 detik
+     benar-benar menghapus file di TV. Cuma file unduhan yang bisa
+     dihapus. */
+  var localDelArmed = false, localDelTimer = null;
+  function deleteSelectedLocal() {
+    var sel = $('localSongSel');
+    var btn = $('btnLocalDelete');
+    if (!sel || !sel.value) return;
+    var id = sel.value;
+    var it = null;
+    for (var i = 0; i < localSongs.length; i++) {
+      if (localSongs[i].id === id) it = localSongs[i];
+    }
+    if (!it || it.source !== 'download') {
+      var st = $('localStatus');
+      if (st) st.textContent = 'Hanya file unduhan yang bisa dihapus.';
+      return;
+    }
+    if (!localDelArmed) {
+      localDelArmed = true;
+      if (btn) btn.textContent = 'Yakin hapus?';
+      if (localDelTimer) clearTimeout(localDelTimer);
+      localDelTimer = setTimeout(function () {
+        localDelArmed = false;
+        if (btn) btn.textContent = '🗑 Hapus';
+      }, 5000);
+      return;
+    }
+    if (localDelTimer) { clearTimeout(localDelTimer); localDelTimer = null; }
+    localDelArmed = false;
+    if (btn) btn.textContent = '🗑 Hapus';
+    if (localPlaying && localId === id) stopLocal();
+    var b = localBridge();
+    var ok = false;
+    if (b && b.localDeleteDownload) {
+      try { ok = !!JSON.parse(b.localDeleteDownload(id) || '{}').ok; } catch (e) {}
+    }
+    var st2 = $('localStatus');
+    if (st2) st2.textContent = ok ? 'File dihapus: ' + it.title : 'File gagal dihapus.';
+    refreshLocalList();
+    updateLocalUi();
+    broadcast();
+  }
   function playLocal(id) {
     var b = localBridge();
     if (!b) return;
@@ -364,12 +390,134 @@
   function openLocalModal() {
     refreshLocalList();
     updateLocalUi();
+    pollDownloadState();
+    if (localDlPoll) clearInterval(localDlPoll);
+    localDlPoll = setInterval(pollDownloadState, 1000);
     var m = $('localModal'); if (!m) return;
     m.classList.remove('hidden');
     var c = $('btnLocalClose'); if (c) c.focus();
   }
   function closeLocalModal() {
     var m = $('localModal'); if (m) m.classList.add('hidden');
+    if (localDlPoll) { clearInterval(localDlPoll); localDlPoll = null; }
+  }
+
+  /* ---------- Unduh video ke TV (MP4) ----------
+     HP cuma memerintah (perintah 'download' lewat WebSocket); resolve
+     stream + unduh dikerjakan TV sendiri di thread background
+     (VideoDownloader). Progres datang dari native lewat
+     __downloadProgress (live, bukan cuma status akhir), diteruskan
+     ke HP lewat broadcast state. Daftar unduhan = file di folder
+     download TV, jadi tidak hilang walau HP sempat putus. */
+  var lastDownload = { state: 'idle' };
+  var dlLastBcAt = 0, dlLastBcPct = -1;
+  var localDlPoll = null; // polling state saat modal File Lokal dibuka
+  function dlProgressText(d) {
+    if (!d || d.state !== 'downloading') return '';
+    var pct = (d.total > 0) ? Math.floor(d.downloaded * 100 / d.total) : 0;
+    var mb = fmtSize(d.downloaded) + (d.total > 0 ? ' / ' + fmtSize(d.total) : '');
+    return (d.total > 0 ? pct + '% · ' : '') + mb;
+  }
+  /* Bukti isi file saat selesai: ukuran potongan video + audio yang
+     digabung TV. Kalau Video 0 MB, file-nya memang cuma suara. */
+  function dlDoneSizes(d) {
+    if (!d || !d.videoBytes) return '';
+    var s = ' · Video ' + fmtSize(d.videoBytes);
+    if (d.audioBytes > 0) s += ' + Audio ' + fmtSize(d.audioBytes);
+    return s;
+  }
+  /* Bar + teks progres di modal File Lokal TV. */
+  function updateDownloadUi() {
+    var d = lastDownload;
+    var wrap = $('localDownloadProgress');
+    var bar = $('localDownloadProgressBar');
+    var txt = $('localDownloadProgressText');
+    var st = $('localDownloadStatus');
+    if (d.state === 'downloading') {
+      if (wrap) wrap.classList.remove('hidden');
+      var pct = (d.total > 0) ? Math.floor(d.downloaded * 100 / d.total) : 0;
+      if (bar) bar.style.width = (d.total > 0 ? pct : 0) + '%';
+      if (txt) txt.textContent = dlProgressText(d);
+      if (st) st.textContent = 'Mengunduh ke TV: ' + (d.title || '') + ' · ' + dlProgressText(d);
+    } else {
+      if (wrap) wrap.classList.add('hidden');
+      if (bar) bar.style.width = '0%';
+      if (txt) txt.textContent = '';
+      if (st) {
+        if (d.state === 'done') st.textContent = 'Selesai diunduh: ' + (d.title || d.file || '') + dlDoneSizes(d) + ', sudah ada di daftar.';
+        else if (d.state === 'failed') st.textContent = 'Unduhan gagal: ' + (d.message || d.error || '') + ' Ketuk ⬇ lagi buat mengulang.';
+        else st.textContent = '';
+      }
+    }
+  }
+  /* Satu pintu masuk semua kabar progres (push native + polling
+     modal): update UI, kirim ke HP (throttle supaya WS tidak
+     dibanjiri tiap potongan kecil), daftar di-scan ulang kalau
+     unduhan selesai. */
+  function applyDownloadProgress(d) {
+    if (!d || typeof d !== 'object') return;
+    var prevState = lastDownload.state;
+    lastDownload = d;
+    updateDownloadUi();
+    if (d.state === 'done') {
+      refreshLocalList();
+      broadcast();
+      return;
+    }
+    if (d.state === 'failed') { broadcast(); return; }
+    if (d.state === 'downloading') {
+      var pct = (d.total > 0) ? Math.floor(d.downloaded * 100 / d.total) : -1;
+      var now = Date.now();
+      if (prevState !== 'downloading' || pct !== dlLastBcPct || now - dlLastBcAt >= 1500) {
+        dlLastBcAt = now; dlLastBcPct = pct;
+        broadcast();
+      }
+    }
+  }
+  /* Dipanggil native (MainActivity) tiap progres berubah + saat
+     selesai/gagal. */
+  window.__downloadProgress = function (d) { applyDownloadProgress(d); };
+  /* Baca state unduhan langsung dari native (dipakai polling modal
+     + sinkronisasi ulang saat Remote sambung lagi). */
+  function pollDownloadState() {
+    var b = localBridge();
+    if (!b || !b.localDownloadState) return;
+    try {
+      var d = JSON.parse(b.localDownloadState() || '{}');
+      if (d && d.state) applyDownloadProgress(d);
+    } catch (e) {}
+  }
+  /* Perintah unduh dari HP sampai ke halaman TV: teruskan ke native. */
+  function startLocalDownload(videoId, title) {
+    var b = localBridge();
+    if (!b || !b.localDownload) {
+      /* TV belum siap (atau versi TV lama tanpa bridge unduh):
+         jangan diam — laporkan gagal supaya HP tidak menggantung. */
+      lastDownload = { state: 'failed', videoId: videoId, title: title || '',
+        error: 'error', message: 'TV belum siap, coba lagi sebentar lagi.' };
+      updateDownloadUi();
+      broadcast();
+      return;
+    }
+    try {
+      var r = JSON.parse(b.localDownload(videoId, title || '') || '{}');
+      if (!r.ok) {
+        lastDownload = { state: 'failed', videoId: videoId, title: title || '',
+          error: r.reason || 'error',
+          message: r.reason === 'busy' ? 'TV sedang mengunduh lagu lain, tunggu selesai dulu.'
+            : 'Unduhan tidak bisa dimulai.' };
+        updateDownloadUi();
+        broadcast();
+        return;
+      }
+      lastDownload = { state: 'downloading', videoId: videoId, title: title || '', downloaded: 0, total: -1 };
+      updateDownloadUi();
+      broadcast();
+    } catch (e) {
+      lastDownload = { state: 'failed', videoId: videoId, title: title || '', error: 'error', message: 'Unduhan tidak bisa dimulai.' };
+      updateDownloadUi();
+      broadcast();
+    }
   }
 
   function showTv(id) {
@@ -510,12 +658,24 @@
        tidak membawa daftar yang sama berulang-ulang. */
     var includeSongs = localSongsRev !== localSongsSentRev;
     if (includeSongs) localSongsSentRev = localSongsRev;
+    /* State unduhan selalu dibaca dari native (bukan ingatan
+       halaman), supaya Remote yang baru sambung langsung dapat
+       progres yang benar, dan unduhan yang jalan terus terlihat
+       walau HP sempat putus. */
+    var dl = lastDownload;
+    try {
+      var lb0 = localBridge();
+      if (lb0 && lb0.localDownloadState) {
+        var ds = JSON.parse(lb0.localDownloadState() || '{}');
+        if (ds && ds.state) { dl = ds; lastDownload = ds; }
+      }
+    } catch (e) {}
     send({ type: 'state', current: current, queue: queue, playing: playing,
            position: position, duration: duration, volume: volume,
            /* Transpose: status pemutar lokal buat Remote */
            local: { playing: localPlaying, id: localId, title: localTitle,
                     semitones: localSemi, isVideo: localIsVideo,
-                    folder: localFolderName,
+                    folder: localFolderName, download: dl,
                     songs: includeSongs ? localSongs.slice(0, 200) : undefined } });
   }
 
@@ -576,7 +736,29 @@
       case 'transpose_delta':
         localSetSemi(localSemi + (parseInt(msg.delta, 10) || 0));
         break;
+      /* ---------- Unduh video ke TV (MP4) ---------- */
+      case 'download':
+        if (msg.videoId) startLocalDownload(msg.videoId, msg.title || '');
+        break;
+      case 'delete_download':
+        /* Hapus file unduhan di TV (dari tab Download HP / modal TV):
+           kalau file itu sedang diputar lokal, hentikan dulu. Daftar
+           di-scan ulang lalu dikirim ke HP lewat broadcast. */
+        if (msg.id) {
+          if (localPlaying && localId === msg.id) stopLocal();
+          var delB = localBridge();
+          if (delB && delB.localDeleteDownload) {
+            try { delB.localDeleteDownload(msg.id); } catch (e) {}
+          }
+          refreshLocalList(true);
+          broadcast();
+        }
+        break;
       case 'get_state':
+        /* Remote baru sambung (atau buka tab Download): baca ulang
+           folder lokal dari disk, bukan cache — unduhan yang sudah
+           selesai tetap muncul walau HP sempat putus. */
+        refreshLocalList(true);
         broadcast();
         break;
     }
@@ -596,7 +778,6 @@
     var lw = $('btnLocalWait'); if (lw) lw.onclick = openLocalModal;
     var lp = $('btnLocalPlayer'); if (lp) lp.onclick = openLocalModal;
     var lc = $('btnLocalClose'); if (lc) lc.onclick = closeLocalModal;
-    var lf = $('btnLocalFolder'); if (lf) lf.onclick = pickLocalFolder;
     var lsv = $('btnLocalShowVideo');
     if (lsv) lsv.onclick = function () {
       var b = localBridge();
@@ -608,6 +789,7 @@
       if (sel && sel.value) playLocal(sel.value);
     };
     var lstop = $('btnLocalStop'); if (lstop) lstop.onclick = function () { if (localPlaying) { stopLocal(); broadcast(); } };
+    var ldel = $('btnLocalDelete'); if (ldel) ldel.onclick = deleteSelectedLocal;
     var ldown = $('btnLocalDown'); if (ldown) ldown.onclick = function () { localSetSemi(localSemi - 1); };
     var lup = $('btnLocalUp'); if (lup) lup.onclick = function () { localSetSemi(localSemi + 1); };
     var lreset = $('btnLocalReset'); if (lreset) lreset.onclick = function () { localSetSemi(0); };
@@ -686,6 +868,17 @@
   var PLAYLIST_KEY = 'karaokePlaylist.v1';
   var savedPlaylist = [];      // [{videoId, title, thumb}]
   var liveQueue = [];          // antrean TV terakhir dari state
+
+  /* ---------- Unduhan MP4 ke TV ----------
+     Daftar unduhan = file di folder download TV (datang lewat
+     broadcast state, sumber "download"), BUKAN simpanan di HP:
+     buka tab Download / sambung ulang selalu baca ulang dari TV,
+     jadi daftar tidak hilang walau HP sempat putus. */
+  var dlButtons = {};          // videoId -> tombol ⬇ di hasil pencarian
+  var phoneLocalSongs = [];    // daftar lagu lokal terakhir dari TV
+  var lastDownloadP = { state: 'idle' }; // progres unduhan terakhir dari TV
+  var pendingDl = null;      // unduhan yang baru diketuk ⬇, menunggu kabar TV
+  var pendingDlTimer = null; // pengawas: TV diam 12 detik = beri tahu user
 
   function loadSavedPlaylist() {
     savedPlaylist = [];
@@ -808,6 +1001,113 @@
       setPlaylistStatus(savedPlaylist.length
         ? 'Tersimpan di HP, belum dikirim ke TV. Sambungkan ke TV lalu ketuk "Putar playlist".'
         : '');
+    }
+  }
+
+  /* ---------- Tab Download (unduhan MP4 di TV) ----------
+     Daftar = file sumber "download" dari daftar lagu TV terakhir.
+     Dibaca ulang tiap tab dibuka (get_state) dan tiap broadcast
+     membawa daftar baru, jadi tetap benar walau HP sempat putus.
+     Ketuk file = putar lokal di TV (transpose tetap jalan). */
+  function renderDownloads() {
+    var list = $('downloadList');
+    if (!list) return;
+    var items = phoneLocalSongs.filter(function (it) { return it.source === 'download'; });
+    var c = $('tabDownloadCount'); if (c) c.textContent = items.length;
+    var dc = $('downloadCount'); if (dc) dc.textContent = items.length;
+    list.innerHTML = '';
+    if (!items.length) {
+      var empty = document.createElement('div');
+      empty.className = 'queue-empty';
+      empty.textContent = 'Belum ada unduhan. Ketuk ⬇ di hasil pencarian untuk mengunduh video ke TV.';
+      list.appendChild(empty);
+      return;
+    }
+    items.forEach(function (it) {
+      var row = document.createElement('div');
+      row.className = 'queue-item';
+      var wrap = document.createElement('div');
+      wrap.style.flex = '1'; wrap.style.minWidth = '0';
+      var t = document.createElement('div');
+      t.className = 'result-title';
+      t.textContent = it.title + (it.isVideo ? ' (video)' : '');
+      var meta = document.createElement('div');
+      meta.className = 'dl-size';
+      meta.textContent = (it.size > 0 ? fmtSize(it.size) : '');
+      wrap.appendChild(t); wrap.appendChild(meta);
+      row.appendChild(wrap);
+      /* Tombol hapus file dari TV. Dua ketuk: ketuk pertama bersiap
+         (tombol berubah), ketuk kedua dalam 5 detik benar-benar
+         menghapus. Daftar diperbarui lewat broadcast dari TV. */
+      var del = document.createElement('button');
+      del.className = 'result-del';
+      del.textContent = '🗑';
+      del.title = 'Hapus file dari TV';
+      var delArmed = false, delTimer = null;
+      del.onclick = function (ev) {
+        ev.stopPropagation();
+        if (!wsOk) { setSearchStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR).'); return; }
+        if (!delArmed) {
+          delArmed = true;
+          del.textContent = 'Yakin?';
+          del.classList.add('armed');
+          delTimer = setTimeout(function () {
+            delArmed = false; del.textContent = '🗑'; del.classList.remove('armed');
+          }, 5000);
+          return;
+        }
+        if (delTimer) { clearTimeout(delTimer); delTimer = null; }
+        delArmed = false;
+        send({ type: 'delete_download', id: it.id });
+        setSearchStatus('Menghapus: ' + it.title);
+      };
+      row.appendChild(del);
+      row.onclick = function () {
+        if (!wsOk) { setSearchStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR).'); return; }
+        send({ type: 'local_play', id: it.id });
+        setSearchStatus('Memutar lokal: ' + it.title);
+      };
+      list.appendChild(row);
+    });
+  }
+
+  /* Bar + teks progres unduhan di tab Download (live dari TV). */
+  function updateDownloadTab() {
+    var d = lastDownloadP || { state: 'idle' };
+    var st = $('downloadStatus');
+    var wrap = $('downloadProgress');
+    var bar = $('downloadProgressBar');
+    var txt = $('downloadProgressText');
+    if (d.state === 'downloading') {
+      if (wrap) wrap.classList.remove('hidden');
+      var pct = (d.total > 0) ? Math.floor(d.downloaded * 100 / d.total) : 0;
+      if (bar) bar.style.width = (d.total > 0 ? pct : 0) + '%';
+      if (txt) txt.textContent = dlProgressText(d);
+      if (st) st.textContent = 'Mengunduh ke TV: ' + (d.title || '') + ' · ' + dlProgressText(d);
+    } else {
+      if (wrap) wrap.classList.add('hidden');
+      if (bar) bar.style.width = '0%';
+      if (txt) txt.textContent = '';
+      if (st) {
+        if (d.state === 'done') st.textContent = 'Selesai diunduh: ' + (d.title || d.file || '') + dlDoneSizes(d) + ', sudah ada di daftar bawah.';
+        else if (d.state === 'failed') st.textContent = 'Unduhan gagal: ' + (d.message || d.error || '') + ' Ketuk ⬇ lagi buat mengulang.';
+        else st.textContent = '';
+      }
+    }
+  }
+
+  /* Tombol ⬇ di hasil pencarian mengikuti progres TV: yang sedang
+     diunduh jadi ⏳ dan tidak bisa ditekan dua kali. */
+  function updateDlButtons() {
+    var d = lastDownloadP || { state: 'idle' };
+    for (var vid in dlButtons) {
+      var btn = dlButtons[vid];
+      if (!btn) continue;
+      if (d.videoId === vid && d.state === 'downloading') {
+        btn.disabled = true; btn.textContent = '⏳';
+      } else {
+        btn.disabled = false; btn.textContent = '⬇';
+      }
     }
   }
 
@@ -1012,6 +1312,7 @@
   function renderResults(items) {
     var box = $('results');
     box.innerHTML = '';
+    dlButtons = {}; // tombol ⬇ lama (hasil pencarian sebelumnya) dibuang
     items.slice(0, 20).forEach(function (it) {
       var row = document.createElement('div');
       row.className = 'result-item';
@@ -1041,7 +1342,34 @@
           : 'Sudah ada di playlist: ' + it.title);
         renderPlaylist();
       };
-      row.appendChild(img); row.appendChild(info); row.appendChild(add);
+      /* Tombol unduh: TV yang mengunduh video ini sebagai MP4 ke
+         folder download-nya; HP cuma memerintah. */
+      var dl = document.createElement('button');
+      dl.className = 'result-dl';
+      dl.textContent = '⬇';
+      dl.title = 'Unduh ke TV (MP4)';
+      dlButtons[it.videoId] = dl;
+      dl.onclick = function (ev) {
+        ev.stopPropagation();
+        if (!wsOk) { setSearchStatus('Belum terhubung ke TV. Sambungkan dulu (scan QR).'); return; }
+        dl.disabled = true; dl.textContent = '⏳';
+        send({ type: 'download', videoId: it.videoId, title: it.title });
+        setSearchStatus('Mengunduh ke TV: ' + it.title);
+        /* Unduhan yang dikirim tapi tidak pernah dikabari TV jangan
+           menggantung: kalau 12 detik tidak ada kabar progres dari
+           TV, beri tahu user dan jangan biarkan status lama. */
+        if (pendingDlTimer) clearTimeout(pendingDlTimer);
+        pendingDl = { videoId: it.videoId, title: it.title };
+        pendingDlTimer = setTimeout(function () {
+          pendingDlTimer = null;
+          if (pendingDl && (!lastDownloadP || lastDownloadP.videoId !== pendingDl.videoId
+              || lastDownloadP.state === 'idle')) {
+            setSearchStatus('TV tidak merespon unduhan "' + pendingDl.title + '". Pastikan TV menyala dan tersambung, lalu ketuk ⬇ lagi.');
+            pendingDl = null;
+          }
+        }, 12000);
+      };
+      row.appendChild(img); row.appendChild(info); row.appendChild(dl); row.appendChild(add);
       row.onclick = function () {
         send({ type: 'play', videoId: it.videoId, title: it.title, thumb: it.thumb });
         setSearchStatus('Memutar: ' + it.title);
@@ -1058,32 +1386,43 @@
       var vp = $('localSemiValP'); if (vp) vp.textContent = fmtSemi(loc.semitones);
       var stp = $('localStatusP');
       if (stp) stp.textContent = loc.playing
-        ? 'Memutar di TV: ' + (loc.title || '') + ' · nada ' + fmtSemi(loc.semitones) + (loc.isVideo ? ' · video' : '')
+        ? 'Memutar di TV · nada ' + fmtSemi(loc.semitones) + (loc.isVideo ? ' · video' : '')
         : 'Belum memutar · nada ' + fmtSemi(loc.semitones);
+      /* Judul lagu lokal yang sedang diputar (bukan pilihan dropdown:
+         pilihan itu tidak berpengaruh ke lagu yang dimainkan). */
+      var nt = $('localNowTitleP');
+      if (nt) nt.textContent = loc.playing ? (loc.title || '') : 'Belum ada lagu lokal yang diputar';
       /* Daftar lagu datang dari TV cuma kalau ada perubahan (scan
          ulang / ganti folder); pilihan user dipertahankan. */
       if (loc.songs && Array.isArray(loc.songs)) {
-        var sel = $('localSongSelP');
-        if (sel) {
-          var prev = sel.value;
-          sel.innerHTML = '';
-          loc.songs.forEach(function (it) {
-            var o = document.createElement('option');
-            o.value = it.id;
-            o.textContent = it.title + (it.isVideo ? ' (video)' : '');
-            sel.appendChild(o);
-          });
-          if (!loc.songs.length) {
-            var o2 = document.createElement('option');
-            o2.value = '';
-            o2.textContent = '(tidak ada lagu lokal)';
-            sel.appendChild(o2);
-          } else if (prev) sel.value = prev;
-        }
+        phoneLocalSongs = loc.songs.slice();
+        renderDownloads();
       }
       if (typeof loc.folder === 'string') {
         var fi = $('localFolderInfoP');
         if (fi) fi.textContent = loc.folder ? ('Folder: ' + loc.folder) : 'Folder bawaan aplikasi';
+      }
+      /* Progres unduhan dari TV (live): tab Download + tombol ⬇. */
+      if (loc.download) {
+        lastDownloadP = loc.download;
+        updateDownloadTab();
+        updateDlButtons();
+        /* Kabar unduhan juga tampil di tab Cari (tempat tombol ⬇
+           ditekan): status di sana tadi cuma tebakan optimis, jadi
+           kalau kabar asli datang, ganti dengan yang benar — progres
+           live, selesai, atau gagal beserta alasannya. */
+        if (pendingDl && loc.download.videoId === pendingDl.videoId) {
+          if (pendingDlTimer) { clearTimeout(pendingDlTimer); pendingDlTimer = null; }
+          if (loc.download.state === 'downloading') {
+            setSearchStatus('Mengunduh ke TV: ' + (loc.download.title || pendingDl.title) + ' · ' + dlProgressText(loc.download));
+          } else if (loc.download.state === 'done') {
+            setSearchStatus('Selesai diunduh: ' + (loc.download.title || pendingDl.title) + ', ada di tab Download.');
+            pendingDl = null;
+          } else if (loc.download.state === 'failed') {
+            setSearchStatus('Unduhan gagal: ' + (loc.download.message || loc.download.error || '') + ' Ketuk ⬇ lagi buat mengulang.');
+            pendingDl = null;
+          }
+        }
       }
     }
     var card = $('npCard');
@@ -1112,18 +1451,30 @@
     $('phoneView').classList.remove('hidden');
     initTheme(); // tema Sistem/Gelap/Terang (v1.3.8)
     setConn(false, 'Menghubungkan ke TV…');
-    /* v1.4.1: dua tab kiri-kanan. Kiri = Cari, kanan = Playlist. */
-    var tabCari = $('tabCari'), tabPlaylist = $('tabPlaylist');
-    var tabBtnCari = $('tabBtnCari'), tabBtnPlaylist = $('tabBtnPlaylist');
+    /* v1.4.4: tiga tab. Cari = pencarian + kontrol lagu. Playlist =
+       antrean tersimpan di HP. Download = unduhan MP4 di TV (daftar
+       dibaca dari folder download TV, bukan dari ingatan HP). */
+    var tabCari = $('tabCari'), tabPlaylist = $('tabPlaylist'), tabDownload = $('tabDownload');
+    var tabBtnCari = $('tabBtnCari'), tabBtnPlaylist = $('tabBtnPlaylist'), tabBtnDownload = $('tabBtnDownload');
     function showTab(name) {
-      var cari = name !== 'playlist';
-      if (tabCari) tabCari.classList.toggle('hidden', !cari);
-      if (tabPlaylist) tabPlaylist.classList.toggle('hidden', cari);
-      if (tabBtnCari) tabBtnCari.classList.toggle('active', cari);
-      if (tabBtnPlaylist) tabBtnPlaylist.classList.toggle('active', !cari);
+      if (tabCari) tabCari.classList.toggle('hidden', name !== 'cari');
+      if (tabPlaylist) tabPlaylist.classList.toggle('hidden', name !== 'playlist');
+      if (tabDownload) tabDownload.classList.toggle('hidden', name !== 'download');
+      if (tabBtnCari) tabBtnCari.classList.toggle('active', name === 'cari');
+      if (tabBtnPlaylist) tabBtnPlaylist.classList.toggle('active', name === 'playlist');
+      if (tabBtnDownload) tabBtnDownload.classList.toggle('active', name === 'download');
+      if (name === 'download') {
+        /* Buka tab Download = baca ulang daftar dari TV (bukan
+           ingatan HP): unduhan yang sudah selesai tetap muncul
+           walau HP sempat putus. */
+        if (wsOk) send({ type: 'get_state' });
+        renderDownloads();
+        updateDownloadTab();
+      }
     }
     if (tabBtnCari) tabBtnCari.onclick = function () { showTab('cari'); };
     if (tabBtnPlaylist) tabBtnPlaylist.onclick = function () { showTab('playlist'); };
+    if (tabBtnDownload) tabBtnDownload.onclick = function () { showTab('download'); };
     loadSavedPlaylist();
     renderPlaylist();
     $('btnDisconnect').onclick = disconnectTv;
@@ -1148,15 +1499,9 @@
       if (!lastState || !lastState.current) return;
       send({ type: lastState.playing ? 'pause' : 'resume' });
     };
-    /* Transpose file lokal: panel di HP kirim perintah ke TV.
-       Putar = lagu yang dipilih di daftar (contoh kalau kosong). */
-    var lpp = $('btnLocalPlayP');
-    if (lpp) lpp.onclick = function () {
-      var sel = $('localSongSelP');
-      var id = (sel && sel.value) || 'sample';
-      send({ type: 'local_play', id: id });
-    };
-    var lsp = $('btnLocalStopP'); if (lsp) lsp.onclick = function () { send({ type: 'local_stop' }); };
+    /* Transpose file lokal: panel di HP kirim perintah nada ke TV.
+       Tidak ada lagi tombol Putar/Stop di sini: lagu lokal diputar
+       dari tab Download (ketuk file), nadanya diatur dari kartu ini. */
     var ldp = $('btnLocalDownP'); if (ldp) ldp.onclick = function () { send({ type: 'transpose_delta', delta: -1 }); };
     var lup2 = $('btnLocalUpP'); if (lup2) lup2.onclick = function () { send({ type: 'transpose_delta', delta: 1 }); };
     var lrp = $('btnLocalResetP'); if (lrp) lrp.onclick = function () { send({ type: 'transpose', value: 0 }); };

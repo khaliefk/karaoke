@@ -66,6 +66,18 @@ button { cursor: pointer; }
 .result-title { font-size: 14px; font-weight: 700; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .result-meta { font-size: 12px; color: #9a9a9a; margin-top: 4px; }
 .result-add { font-size: 22px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #16a34a; color: #fff; flex-shrink: 0; }
+/* Tombol unduh (⬇) di hasil pencarian: unduh video ke TV (MP4). */
+.result-dl { font-size: 20px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #1d7a3d; color: #fff; flex-shrink: 0; }
+.result-dl:active { background: #145c2d; }
+.result-dl:disabled { opacity: .55; }
+/* Tombol hapus (🗑) per file di tab Download. Ketuk sekali = bersiap
+   (merah, "Yakin?"), ketuk kedua = hapus beneran. */
+.result-del { font-size: 18px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #3a3a3a; color: #fff; flex-shrink: 0; }
+.result-del.armed { background: #b91c1c; font-size: 11px; font-weight: 700; }
+body.mode-phone.theme-light .result-del { background: #e4e4e7; color: #171717; }
+body.mode-phone.theme-light .result-del.armed { background: #b91c1c; color: #fff; }
+/* Ukuran file di tab Download (di bawah judul file). */
+.dl-size { font-size: 12px; color: #9a9a9a; margin-top: 2px; }
 .np-card { background: #1a1a1a; border: 1px solid #262626; border-radius: 14px; padding: 14px; margin: 16px 0; }
 .np-label { font-size: 11px; letter-spacing: .12em; color: #9a9a9a; margin-bottom: 6px; }
 .np-title { font-size: 16px; font-weight: 700; line-height: 1.35; }
@@ -143,6 +155,7 @@ body.mode-phone.theme-light .result-item,
 body.mode-phone.theme-light .queue-item,
 body.mode-phone.theme-light .np-card { background: #fff; border: 1px solid #e4e4e7; }
 body.mode-phone.theme-light .result-meta,
+body.mode-phone.theme-light .dl-size,
 body.mode-phone.theme-light .conn-msg,
 body.mode-phone.theme-light .search-status,
 body.mode-phone.theme-light .np-label,
@@ -177,6 +190,8 @@ body.mode-phone.theme-light .playlist-status { color: #71717a; }
 
 /* ============ Transpose file lokal (bukan rilis) ============ */
 .local-trial-title { font-size: 18px; font-weight: 800; }
+/* Judul lagu lokal yang sedang diputar di kartu transpose HP. */
+.local-now-title { font-size: 15px; font-weight: 700; line-height: 1.35; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .local-trial-sub { font-size: 13px; color: #9a9a9a; line-height: 1.45; margin-top: 6px; }
 .local-trial-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .local-label { font-size: 14px; color: #c9c9c9; }
@@ -184,6 +199,16 @@ body.mode-phone.theme-light .playlist-status { color: #71717a; }
 .local-status { font-size: 13px; color: #9a9a9a; margin-top: 10px; min-height: 16px; line-height: 1.4; }
 .local-song-sel { flex: 1; min-width: 0; padding: 12px; font-size: 15px; border-radius: 10px; border: 1px solid #2e2e2e; background: #1a1a1a; color: #fff; }
 .local-folder-info { flex: 1; min-width: 0; font-size: 13px; color: #9a9a9a; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; }
+/* Fallback pilih folder (v1.4.4): kotak yang muncul kalau TV tidak
+   punya pemilih folder sistem. Pesan + daftar folder dibuat besar
+   supaya kebaca dari sofa dan tidak kelewat. */
+.local-folder-fallback { margin-top: 12px; padding: 12px; border: 1px solid #8a6d1b; border-radius: 10px; background: #241d08; }
+.local-folder-hint { font-size: 13px; color: #e8b64c; line-height: 1.5; }
+.local-folder-choices { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; }
+.local-folder-choice { text-align: left; padding: 10px 12px; font-size: 14px; border-radius: 8px; border: 1px solid #2e2e2e; background: #1a1a1a; color: #fff; cursor: pointer; }
+.mode-tv .local-folder-hint { font-size: 2.6vh; }
+.mode-tv .local-folder-choice { font-size: 2.8vh; padding: 1.2vh 1vw; }
+.mode-tv .local-folder-fallback { margin-top: 1.6vh; }
 .about-modal button:focus { outline: 3px solid #4ade80; outline-offset: 2px; }
 /* layar TV: semua serba besar */
 .mode-tv .local-trial-title { font-size: 4.2vh; }
