@@ -40,6 +40,17 @@
       <button id="btnExitPlayer" class="btn small danger-outline">Keluar</button>
     </div>
   </div>
+  <!-- Popup donasi "Traktir Kopi" (v1.4.8, mode TV saja): muncul tiap
+       aplikasi TV dibuka. QRIS user, tidak wajib — tombol Tutup
+       kembali ke layar tunggu biasa. -->
+  <div id="donateModal" class="about-modal hidden">
+    <div class="about-card donate-card">
+      <div class="donate-title">☕ Traktir Kopi</div>
+      <p class="donate-sub">Kalau aplikasi ini membantu, traktir kami kopi lewat QRIS di bawah. Tidak wajib.</p>
+      <img id="donateQr" class="donate-qr" src="/qris-donasi.jpg" alt="QRIS Traktir Kopi">
+      <button id="btnDonateClose" class="btn primary about-close">Tutup</button>
+    </div>
+  </div>
 </div>
 
 <!-- ============ Transpose file lokal (bukan rilis) ============ -->
@@ -247,6 +258,6 @@
   </div>
 </div>
 
-<script src="app.js?v=1.4.7"></script>
+<script src="app.js?v=1.4.8"></script>
 </body>
 </html>

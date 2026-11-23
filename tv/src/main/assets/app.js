@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.4.7';
+  var APP_VERSION = '1.4.9';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -767,6 +767,13 @@
   function initTv() {
     $('tvView').classList.remove('hidden');
     showTv('wait');
+    /* v1.4.8: popup donasi "Traktir Kopi" tiap aplikasi dibuka.
+       Tutup -> kembali ke layar tunggu biasa; tidak muncul lagi
+       sampai aplikasi dibuka ulang. */
+    var dc = $('btnDonateClose');
+    if (dc) dc.onclick = function () { var m = $('donateModal'); if (m) m.classList.add('hidden'); };
+    var dm = $('donateModal');
+    if (dm) dm.classList.remove('hidden');
     /* tombol Keluar: layar QR + bar bawah player, dua-duanya panggil
        bridge Android yang mematikan service lalu menutup aplikasi */
     var ex1 = $('btnExitWait'); if (ex1) ex1.onclick = exitApp;

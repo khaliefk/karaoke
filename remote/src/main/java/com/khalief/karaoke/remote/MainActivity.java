@@ -5,16 +5,19 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.View;
 import android.webkit.JavascriptInterface;
@@ -104,6 +107,17 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 showThemeDialog();
+            }
+        });
+
+        // v1.4.9: tombol "Jaga tetap hidup" di layar scan: buka lagi
+        // dialog baterai tanpa batas + autostart kalau tadi dilewati
+        // atau mau diubah.
+        Button keepAliveBtn = findViewById(R.id.battery_btn);
+        keepAliveBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showKeepAliveDialog();
             }
         });
 
@@ -348,6 +362,8 @@ public class MainActivity extends Activity {
         applyScanTheme(); // v1.3.8: tema bisa berubah dari halaman web
         webView.setVisibility(View.GONE);
         scanView.setVisibility(View.VISIBLE);
+        // v1.4.9: belum tersambung ke TV, penjaga tidak perlu jalan.
+        KeepAliveService.stop(this);
     }
 
     /** v1.3.8: terapkan tema (Sistem/Gelap/Terang) ke layar pilihan.
@@ -380,6 +396,12 @@ public class MainActivity extends Activity {
         b.setText("\uD83C\uDFA8 Tema: " + ThemeHelper.label(ThemeHelper.getTheme(this)));
         b.setBackgroundTintList(ColorStateList.valueOf(ThemeHelper.ghostBtn(dark)));
         b.setTextColor(ThemeHelper.ghostBtnText(dark));
+        // v1.4.9: tombol "Jaga tetap hidup" ikut tema yang sama.
+        Button kb = findViewById(R.id.battery_btn);
+        if (kb != null) {
+            kb.setBackgroundTintList(ColorStateList.valueOf(ThemeHelper.ghostBtn(dark)));
+            kb.setTextColor(ThemeHelper.ghostBtnText(dark));
+        }
     }
 
     /** v1.3.8: dialog pilih tema. Pilih langsung tersimpan + diterapkan. */
@@ -409,6 +431,9 @@ public class MainActivity extends Activity {
     private void showWebView() {
         scanView.setVisibility(View.GONE);
         webView.setVisibility(View.VISIBLE);
+        // v1.4.9: mulai jaga koneksi + tawarkan baterai tanpa batas.
+        KeepAliveService.start(this);
+        maybePromptBattery();
     }
 
     @Override
@@ -479,12 +504,116 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         stopMicStream();
+        // v1.4.9: user sengaja keluar (tombol Keluar / back), matikan
+        // penjaga. Kalau activity hancur bukan karena keluar (misal
+        // rotasi, yang sudah ditangani configChanges), service jalan
+        // terus supaya koneksi tidak putus.
+        if (isFinishing()) {
+            KeepAliveService.stop(this);
+        }
         if (downloadReceiver != null) {
             try { unregisterReceiver(downloadReceiver); } catch (Exception e) {}
             downloadReceiver = null;
         }
         if (webView != null) webView.destroy();
         super.onDestroy();
+    }
+
+    /* ---------- v1.4.9: jaga remote tetap hidup ---------- */
+
+    /** Tawarkan "baterai tanpa batas" sekali, setelah remote pertama
+        kali tersambung ke TV. Tanpa ini, Doze + optimasi baterai
+        bisa tetap membekukan koneksi walau foreground service jalan.
+        Dialog sistem yang muncul sesudahnya yang menentukan; kalau
+        user memilih "Nanti", tombol "Jaga tetap hidup" di layar scan
+        bisa membukanya lagi. */
+    private void maybePromptBattery() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+        SharedPreferences prefs = getSharedPreferences("karaoke", MODE_PRIVATE);
+        if (prefs.getBoolean("battery_prompted", false)) return;
+        prefs.edit().putBoolean("battery_prompted", true).apply();
+        new AlertDialog.Builder(this)
+                .setTitle("Baterai tanpa batas?")
+                .setMessage("Supaya remote tidak mati sendiri saat diminimize "
+                        + "atau layar HP mati, izinkan aplikasi ini berjalan "
+                        + "tanpa batasan baterai. Di layar berikutnya pilih "
+                        + "Izinkan.")
+                .setPositiveButton("Izinkan", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        openBatterySettings();
+                    }
+                })
+                .setNegativeButton("Nanti", null)
+                .show();
+    }
+
+    /** Layar sistem "optimasi baterai" untuk aplikasi ini. */
+    private void openBatterySettings() {
+        try {
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(
+                        Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** Dialog dari tombol "Jaga tetap hidup" di layar scan. Dua
+        langkah yang bikin remote awet: baterai tanpa batas, dan
+        (khusus Xiaomi/Redmi/POCO) Autostart supaya sistem tidak
+        mematikan aplikasi saat layar mati. */
+    private void showKeepAliveDialog() {
+        final boolean xiaomi = isXiaomi();
+        final String[] items = xiaomi
+                ? new String[]{"Baterai tanpa batas",
+                        "Autostart (Xiaomi/POCO)", "Tutup"}
+                : new String[]{"Baterai tanpa batas", "Tutup"};
+        new AlertDialog.Builder(this)
+                .setTitle("Jaga remote tetap hidup")
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        String item = items[which];
+                        if (item.startsWith("Baterai")) {
+                            openBatterySettings();
+                        } else if (item.startsWith("Autostart")) {
+                            openAutostartSettings();
+                        }
+                    }
+                })
+                .show();
+    }
+
+    /** HP Xiaomi/Redmi/POCO? Merek ini yang punya layar Autostart
+        sendiri dan paling agresif membunuh aplikasi latar belakang. */
+    private static boolean isXiaomi() {
+        String m = Build.MANUFACTURER;
+        if (m == null) return false;
+        m = m.toLowerCase();
+        return m.contains("xiaomi") || m.contains("redmi") || m.contains("poco");
+    }
+
+    /** Layar Autostart MIUI. Kalau komponennya tidak ada (ROM lain /
+        MIUI versi lain), jatuh ke detail aplikasi di Pengaturan. */
+    private void openAutostartSettings() {
+        try {
+            Intent i = new Intent();
+            i.setComponent(new ComponentName("com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+            startActivity(i);
+            return;
+        } catch (Exception ignored) {}
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {}
     }
 
     /* ---------- Mic HP (v1.3.0) ---------- */

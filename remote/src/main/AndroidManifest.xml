@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.khalief.karaoke.remote"
-    android:versionCode="22"
-    android:versionName="1.4.7">
+    android:versionCode="24"
+    android:versionName="1.4.9">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -15,6 +15,15 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- v1.4.9: remote tidak mati sendiri saat diminimize / layar mati.
+         FOREGROUND_SERVICE + DATA_SYNC untuk KeepAliveService (jaga
+         koneksi WebSocket + mic tetap hidup); WAKE_LOCK supaya CPU
+         tidak dibekukan Doze saat layar mati; REQUEST_IGNORE_BATTERY_
+         OPTIMIZATIONS untuk dialog "baterai tanpa batas". -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -38,5 +47,14 @@
             android:name=".ScannerActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+
+        <!-- v1.4.9: penjaga koneksi. Jalan selama remote tersambung ke
+             TV, berhenti saat user keluar / kembali ke layar scan.
+             Tipe dataSync: yang dijaga adalah koneksi data (WebSocket
+             mic + sesi WebView) ke TV. -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

@@ -221,3 +221,14 @@ body.mode-phone.theme-light .playlist-status { color: #71717a; }
 .mode-tv .local-folder-info { font-size: 2.6vh; }
 .mode-tv .local-trial .btn { font-size: 3vh; padding: 1.4vh 1.6vw; }
 .mode-tv .local-trial .about-close { width: 100%; margin-top: 2vh; }
+
+/* ---------- Popup donasi "Traktir Kopi" (v1.4.8, mode TV saja) ---------- */
+.donate-card { text-align: center; }
+.donate-title { font-size: 22px; font-weight: 800; }
+.donate-sub { font-size: 15px; line-height: 1.5; color: #c9c9c9; margin: 10px 0 14px; }
+.donate-qr { width: min(72vw, 340px); height: auto; background: #fff; padding: 10px; border-radius: 12px; border: 1px solid #2a2a2a; }
+/* di TV: judul, teks, dan QR lebih besar biar kebaca dari sofa dan
+   QR gampang di-scan dari HP */
+.mode-tv .donate-title { font-size: 5vh; }
+.mode-tv .donate-sub { font-size: 3vh; }
+.mode-tv .donate-qr { width: min(80vw, 44vh); padding: 1.5vh; border-radius: 2vh; }

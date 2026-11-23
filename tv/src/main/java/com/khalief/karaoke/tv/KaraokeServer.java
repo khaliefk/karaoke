@@ -270,6 +270,9 @@ public class KaraokeServer {
                             "text/plain", "qr error: " + e.getMessage());
                 }
             }
+            if (uri.equals("/qris-donasi.jpg")) {
+                return serveAsset("qris-donasi.jpg", "image/jpeg");
+            }
             if (uri.equals("/api/info")) {
                 return newFixedLengthResponse(Response.Status.OK,
                         "application/json", parent.infoJson());
