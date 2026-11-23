@@ -114,6 +114,10 @@ public class LocalPlayer {
     private String currentId = null;
     private String currentTitle = null;
     private boolean currentIsVideo = false;
+    /** Lagu dijeda (pause) tapi belum di-stop: dipakai tombol
+        play/pause di Remote HP. MediaPlayer tetap pegang file,
+        start() melanjutkan dari posisi yang sama. */
+    private boolean paused = false;
     private int lastVideoW = 0;
     private int lastVideoH = 0;
     private volatile boolean destroyed = false;
@@ -850,6 +854,7 @@ public class LocalPlayer {
             applyVolume();
             applyParams();
             p.start();
+            paused = false;
             if (video && videoListener != null) {
                 // Beri tahu listener TANPA syarat surface sudah valid.
                 // Layer video mulai GONE, jadi surface memang belum
@@ -905,6 +910,57 @@ public class LocalPlayer {
         }
     }
 
+    /** Jeda lagu (posisi dipertahankan). Dipakai tombol pause Remote. */
+    public synchronized boolean pause() {
+        try {
+            if (mp != null && mp.isPlaying()) {
+                mp.pause();
+                paused = true;
+                return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /** Lanjutkan lagu yang dijeda. */
+    public synchronized boolean resume() {
+        try {
+            if (mp != null && !mp.isPlaying()) {
+                mp.start();
+                paused = false;
+                return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /** Loncat ke posisi (milidetik). Jalan juga saat dijeda. */
+    public synchronized boolean seekTo(int msec) {
+        try {
+            if (mp != null) {
+                mp.seekTo(Math.max(0, msec));
+                return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    public synchronized int getPosition() {
+        try {
+            return mp != null ? Math.max(0, mp.getCurrentPosition()) : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public synchronized int getDuration() {
+        try {
+            return mp != null ? Math.max(0, mp.getDuration()) : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public synchronized boolean isCurrentVideo() {
         return currentIsVideo;
     }
@@ -914,6 +970,9 @@ public class LocalPlayer {
         try {
             JSONObject o = new JSONObject();
             o.put("playing", isPlaying());
+            o.put("paused", paused && mp != null);
+            o.put("position", getPosition() / 1000);
+            o.put("duration", getDuration() / 1000);
             o.put("id", currentId == null ? JSONObject.NULL : currentId);
             o.put("title", currentTitle == null ? "" : currentTitle);
             o.put("isVideo", currentIsVideo);
@@ -939,6 +998,7 @@ public class LocalPlayer {
         currentId = null;
         currentTitle = null;
         currentIsVideo = false;
+        paused = false;
         lastVideoW = 0;
         lastVideoH = 0;
         if (wasVideo && videoListener != null) {

@@ -10,7 +10,7 @@
   var WS_PORT = 8081;
   /* Versi aplikasi — UBAH BARENG android:versionName di kedua
      AndroidManifest.xml (tv + remote) tiap kali rilis baru. */
-  var APP_VERSION = '1.4.9';
+  var APP_VERSION = '1.4.10';
   document.body.classList.add(MODE === 'tv' ? 'mode-tv' : 'mode-phone');
 
   function $(id) { return document.getElementById(id); }
@@ -226,6 +226,7 @@
      cuma nada yang berubah -6..+6 semitone. Mic HP tidak kena efek. */
   var localSongs = [];        // [{id, title, source, isVideo}] dari Android.localList()
   var localPlaying = false;
+  var localPaused = false;    // lagu lokal dijeda (pause), belum di-stop
   var localId = null, localTitle = '';
   var localSemi = 0;          // semitone saat ini (-6..+6)
   var LOCAL_MIN = -6, LOCAL_MAX = 6;
@@ -314,8 +315,72 @@
   function stopLocal() {
     var b = localBridge();
     if (b) { try { b.localStop(); } catch (e) {} }
-    localPlaying = false; localId = null; localTitle = ''; localIsVideo = false;
+    localPlaying = false; localPaused = false; localId = null; localTitle = ''; localIsVideo = false;
     updateLocalUi();
+    /* v1.4.10: lagu lokal berhenti -> balik ke layar tunggu. Aman
+       di semua jalur: playNow() memanggil showTv('player') sesudah
+       ini, resetSession() juga memanggil showTv('wait') sendiri. */
+    showTv('wait');
+  }
+
+  /* ---------- Kontrol lagu lokal dari Remote HP ----------
+     Tombol play/pause/next/prev/replay + bilah progres di Remote
+     sekarang berlaku juga buat lagu download, mirip kontrol stream:
+     dijeda (posisi dipertahankan), dilanjutkan, pindah lagu, loncat.
+     Volume sudah berlaku buat keduanya dari dulu. */
+  function pauseLocal() {
+    var b = localBridge();
+    if (b) { try { b.localPause(); } catch (e) {} }
+    localPaused = true;
+    broadcast();
+  }
+  function resumeLocal() {
+    var b = localBridge();
+    if (b) { try { b.localResume(); } catch (e) {} }
+    localPaused = false;
+    broadcast();
+  }
+  function localIndex() {
+    for (var k = 0; k < localSongs.length; k++) {
+      if (localSongs[k].id === localId) return k;
+    }
+    return -1;
+  }
+  function localPosition() {
+    var b = localBridge();
+    if (b && b.localState) {
+      try {
+        var st = JSON.parse(b.localState() || '{}');
+        if (typeof st.position === 'number') return st.position;
+      } catch (e) {}
+    }
+    return 0;
+  }
+  function localNext() {
+    if (!localSongs.length) refreshLocalList(true);
+    var i = localIndex();
+    if (i < 0 || !localSongs.length) return;
+    var n = localSongs[(i + 1) % localSongs.length];
+    if (n) playLocal(n.id);
+  }
+  function localPrev() {
+    if (!localSongs.length) refreshLocalList(true);
+    var i = localIndex();
+    if (i < 0 || !localSongs.length) return;
+    if (localPosition() > 5) { localReplay(); return; }
+    var p = localSongs[(i - 1 + localSongs.length) % localSongs.length];
+    if (p) playLocal(p.id);
+  }
+  function localReplay() {
+    var b = localBridge();
+    if (b) { try { b.localSeekTo(0); b.localResume(); } catch (e) {} }
+    localPaused = false;
+    broadcast();
+  }
+  function localSeekTo(sec) {
+    var b = localBridge();
+    if (b) { try { b.localSeekTo(Math.max(0, sec | 0)); } catch (e) {} }
+    broadcast();
   }
   /* Hapus file unduhan yang dipilih di modal TV. Dua ketuk: ketuk
      pertama bersiap (tombol berubah), ketuk kedua dalam 5 detik
@@ -364,7 +429,10 @@
   function playLocal(id) {
     var b = localBridge();
     if (!b) return;
-    /* lagu lokal = mode terpisah: matikan dulu player YouTube */
+    /* lagu lokal = mode terpisah: matikan dulu player YouTube, dan
+       batalkan pemuatan stream yang tertunda supaya tidak mulai
+       sendiri sesudahnya. */
+    pendingVideo = null;
     if (player && playerReady) { try { player.stopVideo(); } catch (e) {} }
     playing = false;
     var ok = false;
@@ -374,7 +442,12 @@
       if (st) st.textContent = 'Gagal memutar file lokal.';
       return;
     }
-    localPlaying = true; localId = id;
+    /* v1.4.10: lagu stream yang sedang jalan diganti lagu lokal.
+       Simpan ke history seperti playNow, lalu kosongkan current
+       supaya status tayang dan now bar tidak ketimpa judul stream. */
+    if (current) history.push(current);
+    current = null;
+    localPlaying = true; localPaused = false; localId = id;
     localTitle = '';
     localIsVideo = false;
     for (var i = 0; i < localSongs.length; i++) {
@@ -385,6 +458,13 @@
     }
     try { b.localTranspose(localSemi); } catch (e) {}
     updateLocalUi();
+    /* v1.4.10: selama lagu lokal diputar, layar TV menampilkan layar
+       player (judul lagu lokal di now bar), bukan halaman QR. Jadi
+       kalau lapisan video sempat tersembunyi, yang terlihat adalah
+       info lagu, bukan QR pairing. */
+    var nt = $('nowTitle'); if (nt) nt.textContent = '▶ ' + localTitle;
+    var nx = $('nextTitle'); if (nx) nx.textContent = 'File lokal · nada ' + fmtSemi(localSemi);
+    showTv('player');
     broadcast();
   }
   function openLocalModal() {
@@ -575,12 +655,19 @@
         onReady: function (e) {
           playerReady = true;
           try { e.target.setVolume(volume); } catch (err) {}
+          /* v1.4.10: lagu lokal sedang jalan -> jangan autoplay stream.
+             Player ini dibuat untuk lagu stream yang sudah dibatalkan
+             saat lagu lokal diputar. */
+          if (localPlaying) return;
           e.target.playVideo();
           /* lagu yang diminta saat player masih init: putar sekarang */
           if (pendingVideo) { var v = pendingVideo; pendingVideo = null; loadVideoByIdSafe(v); }
         },
         onStateChange: function (e) {
-          if (e.data === YT.PlayerState.ENDED) { playNext(); }
+          /* v1.4.10: stopVideo() dari playLocal memicu ENDED juga.
+             Kalau lagu lokal sedang jalan, jangan lanjut ke antrean
+             stream, kalau tidak stream hidup lagi di atas lagu lokal. */
+          if (e.data === YT.PlayerState.ENDED) { if (!localPlaying) playNext(); }
           else if (e.data === YT.PlayerState.PLAYING) { playing = true; broadcast(); }
           else if (e.data === YT.PlayerState.PAUSED) { playing = false; broadcast(); }
         },
@@ -629,6 +716,9 @@
   function playPrev() {
     if (position > 5) { replay(); return; }
     if (history.length > 0) {
+      /* v1.4.10: lagu stream sebelumnya diminta user -> lagu lokal
+         yang sedang jalan berhenti dulu. */
+      if (localPlaying) stopLocal();
       if (current) queue.unshift(current);
       var prev = history.pop();
       current = prev;
@@ -641,6 +731,10 @@
   }
 
   function replay() {
+    /* v1.4.10: ulang lagu stream -> lagu lokal berhenti dulu, kalau
+       memang ada player stream. Tanpa player, tidak ada yang
+       diulang dan lagu lokal dibiarkan jalan. */
+    if (localPlaying && player) stopLocal();
     if (player && playerReady) { try { player.seekTo(0, true); player.playVideo(); } catch (e) {} }
     position = 0; playing = true; broadcast();
   }
@@ -663,18 +757,26 @@
        progres yang benar, dan unduhan yang jalan terus terlihat
        walau HP sempat putus. */
     var dl = lastDownload;
+    var lp = null;
     try {
       var lb0 = localBridge();
       if (lb0 && lb0.localDownloadState) {
         var ds = JSON.parse(lb0.localDownloadState() || '{}');
         if (ds && ds.state) { dl = ds; lastDownload = ds; }
       }
+      /* Posisi + durasi lagu lokal buat bilah progres Remote. */
+      if (lb0 && lb0.localState) {
+        try { lp = JSON.parse(lb0.localState() || '{}'); } catch (e2) {}
+      }
     } catch (e) {}
     send({ type: 'state', current: current, queue: queue, playing: playing,
            position: position, duration: duration, volume: volume,
            /* Transpose: status pemutar lokal buat Remote */
-           local: { playing: localPlaying, id: localId, title: localTitle,
+           local: { playing: localPlaying && !localPaused, paused: localPaused,
+                    id: localId, title: localTitle,
                     semitones: localSemi, isVideo: localIsVideo,
+                    position: (lp && typeof lp.position === 'number') ? lp.position : 0,
+                    duration: (lp && typeof lp.duration === 'number') ? lp.duration : 0,
                     folder: localFolderName, download: dl,
                     songs: includeSongs ? localSongs.slice(0, 200) : undefined } });
   }
@@ -688,18 +790,30 @@
         if (msg.videoId) { queue.push({ videoId: msg.videoId, title: msg.title || '', thumb: msg.thumb || '' }); broadcast(); }
         break;
       case 'pause':
+        /* Lagu lokal jalan -> jeda lagu lokal; kalau tidak, jeda stream. */
+        if (localPlaying) { pauseLocal(); break; }
         if (player && playerReady) { try { player.pauseVideo(); } catch (e) {} }
         playing = false; broadcast();
         break;
       case 'resume':
+        /* Lagu lokal dijeda -> lanjutkan lagu lokal; kalau tidak,
+           lanjutkan stream. */
+        if (localPlaying) { resumeLocal(); break; }
         if (player && playerReady) { try { player.playVideo(); } catch (e) {} }
         playing = true; broadcast();
         break;
-      case 'next': playNext(); break;
-      case 'prev': playPrev(); break;
-      case 'replay': replay(); break;
+      case 'next':
+        if (localPlaying) { localNext(); break; }
+        playNext(); break;
+      case 'prev':
+        if (localPlaying) { localPrev(); break; }
+        playPrev(); break;
+      case 'replay':
+        if (localPlaying) { localReplay(); break; }
+        replay(); break;
       case 'seek':
         var s = parseFloat(msg.value);
+        if (localPlaying) { if (!isNaN(s)) localSeekTo(s); break; }
         if (!isNaN(s) && player && playerReady) {
           try { player.seekTo(Math.max(0, s), true); } catch (e) {}
           position = Math.max(0, s); broadcast();
@@ -842,6 +956,10 @@
           position = player.getCurrentTime() || 0;
           duration = player.getDuration() || 0;
         } catch (e) {}
+        broadcast();
+      } else if (localPlaying && !localPaused) {
+        /* Lagu lokal jalan: kirim posisi ke HP tiap detik supaya
+           bilah progres + waktu di Remote ikut jalan. */
         broadcast();
       }
     }, 1000);
@@ -1394,11 +1512,11 @@
       var stp = $('localStatusP');
       if (stp) stp.textContent = loc.playing
         ? 'Memutar di TV · nada ' + fmtSemi(loc.semitones) + (loc.isVideo ? ' · video' : '')
-        : 'Belum memutar · nada ' + fmtSemi(loc.semitones);
+        : (loc.paused ? 'Dijeda di TV · nada ' + fmtSemi(loc.semitones) : 'Belum memutar · nada ' + fmtSemi(loc.semitones));
       /* Judul lagu lokal yang sedang diputar (bukan pilihan dropdown:
          pilihan itu tidak berpengaruh ke lagu yang dimainkan). */
       var nt = $('localNowTitleP');
-      if (nt) nt.textContent = loc.playing ? (loc.title || '') : 'Belum ada lagu lokal yang diputar';
+      if (nt) nt.textContent = (loc.playing || loc.paused) ? (loc.title || '') : 'Belum ada lagu lokal yang diputar';
       /* Daftar lagu datang dari TV cuma kalau ada perubahan (scan
          ulang / ganti folder); pilihan user dipertahankan. */
       if (loc.songs && Array.isArray(loc.songs)) {
@@ -1432,13 +1550,25 @@
         }
       }
     }
+    /* Kartu kontrol tampil buat stream maupun lagu download, isinya
+       sama: judul, bilah progres + waktu, play/pause, next/prev,
+       replay, volume. */
     var card = $('npCard');
-    if (s.current) {
+    var locActive = loc && (loc.playing || loc.paused);
+    if (s.current || locActive) {
       card.classList.remove('hidden');
-      $('npTitle').textContent = s.current.title || '';
-      $('npBar').style.width = (s.duration > 0 ? Math.min(100, (s.position / s.duration) * 100) : 0) + '%';
-      $('npTime').textContent = fmt(s.position) + ' / ' + fmt(s.duration);
-      $('btnPlayPause').textContent = s.playing ? '⏸' : '▶';
+      if (locActive) {
+        $('npTitle').textContent = (loc.title || '') + (loc.paused ? ' (dijeda)' : '');
+        var lp2 = loc.position || 0, ld2 = loc.duration || 0;
+        $('npBar').style.width = (ld2 > 0 ? Math.min(100, (lp2 / ld2) * 100) : 0) + '%';
+        $('npTime').textContent = fmt(lp2) + ' / ' + fmt(ld2);
+        $('btnPlayPause').textContent = loc.playing ? '⏸' : '▶';
+      } else {
+        $('npTitle').textContent = s.current.title || '';
+        $('npBar').style.width = (s.duration > 0 ? Math.min(100, (s.position / s.duration) * 100) : 0) + '%';
+        $('npTime').textContent = fmt(s.position) + ' / ' + fmt(s.duration);
+        $('btnPlayPause').textContent = s.playing ? '⏸' : '▶';
+      }
       /* jangan rebut slider saat user lagi geser: broadcast tiap detik
          sempat bikin jempol balik ke nilai lama, volume jadi susah diatur */
       if (typeof s.volume === 'number' && !volDragging) {
@@ -1503,7 +1633,11 @@
     $('searchBtn').onclick = doSearch;
     $('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
     $('btnPlayPause').onclick = function () {
-      if (!lastState || !lastState.current) return;
+      if (!lastState) return;
+      var lc = lastState.local;
+      if (lc && lc.playing) { send({ type: 'pause' }); return; }
+      if (lc && lc.paused) { send({ type: 'resume' }); return; }
+      if (!lastState.current) return;
       send({ type: lastState.playing ? 'pause' : 'resume' });
     };
     /* Transpose file lokal: panel di HP kirim perintah nada ke TV.
@@ -1529,11 +1663,16 @@
     };
     /* ketuk bilah progres = loncat (seek) ke bagian lagu itu */
     $('npProgress').addEventListener('click', function (ev) {
-      if (!lastState || !lastState.current || !lastState.duration) return;
+      if (!lastState) return;
+      var dur = 0;
+      var lc = lastState.local;
+      if (lc && (lc.playing || lc.paused) && lc.duration) dur = lc.duration;
+      else if (lastState.current && lastState.duration) dur = lastState.duration;
+      if (!dur) return;
       var r = this.getBoundingClientRect();
       var frac = (ev.clientX - r.left) / r.width;
       frac = Math.max(0, Math.min(1, frac));
-      var sec = Math.floor(frac * lastState.duration);
+      var sec = Math.floor(frac * dur);
       send({ type: 'seek', value: sec });
       setSearchStatus('Loncat ke ' + fmt(sec) + '.');
     });

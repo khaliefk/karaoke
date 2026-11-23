@@ -217,15 +217,16 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // Layar video file lokal: di atas segalanya, sembunyi sampai
-        // ada video yang diputar. Ketuk video = sembunyikan layarnya
-        // (audio tetap jalan); muncul lagi lewat tombol di modal.
+        // ada video yang diputar. v1.4.10: ketuk layar TIDAK LAGI
+        // menyembunyikan video. Ketukan tak sengaja saat karaoke
+        // bikin video hilang dan yang terlihat malah halaman QR,
+        // padahal lagu tetap jalan. Video cuma hilang saat lagu
+        // berhenti/selesai; muncul lagi lewat tombol "Tampilkan video"
+        // di modal File Lokal kalau lapisan sempat tersembunyi.
         videoLayer = new FrameLayout(this);
         videoLayer.setBackgroundColor(Color.BLACK);
         videoLayer.setVisibility(View.GONE);
         videoSurface = new SurfaceView(this);
-        videoSurface.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { hideVideoLayer(); }
-        });
         videoLayer.addView(videoSurface, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER));
@@ -719,6 +720,25 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void localStop() {
             if (localPlayer != null) localPlayer.stop();
+        }
+
+        /** Jeda lagu lokal (posisi dipertahankan), buat tombol
+            play/pause di Remote HP. */
+        @JavascriptInterface
+        public boolean localPause() {
+            return localPlayer != null && localPlayer.pause();
+        }
+
+        /** Lanjutkan lagu lokal yang dijeda. */
+        @JavascriptInterface
+        public boolean localResume() {
+            return localPlayer != null && localPlayer.resume();
+        }
+
+        /** Loncat lagu lokal ke detik tertentu (bilah progres Remote). */
+        @JavascriptInterface
+        public boolean localSeekTo(final int sec) {
+            return localPlayer != null && localPlayer.seekTo(sec * 1000);
         }
 
         /** Ubah transpose (-6..+6). Mengembalikan nilai yang diterapkan. */
